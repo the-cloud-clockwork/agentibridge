@@ -31,6 +31,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from agentibridge.claude_assets import install_claude_assets, uninstall_claude_assets
+
 
 DATA_DIR = Path(__file__).parent / "data"
 _ENV_FILE = "agentibridge.env"
@@ -949,6 +951,13 @@ def cmd_install(args: argparse.Namespace) -> None:
         else:
             print(f"  {unit}: enabled (start failed — check journalctl --user -u {unit})")
     print()
+
+    try:
+        install_claude_assets()
+    except Exception as exc:
+        print(f"  [!!] Claude asset install skipped: {exc}")
+
+    print()
     print("Check status with: agentibridge status")
     print("View logs with: journalctl --user -u agentibridge -f")
 
@@ -974,6 +983,13 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
         pass
 
     print("  Services uninstalled")
+    print()
+
+    try:
+        uninstall_claude_assets()
+    except Exception as exc:
+        print(f"  [!!] Claude asset uninstall skipped: {exc}")
+
     print()
     print("Note: Config files in ~/.agentibridge/ were preserved.")
     print("Remove manually if no longer needed.")
