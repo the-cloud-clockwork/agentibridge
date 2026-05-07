@@ -12,12 +12,15 @@ because agentibridge is a single source, not a chain of profiles.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).parent / "package"
 CLAUDE_HOME = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home() / ".claude")))
+CLAUDE_JSON = Path.home() / ".claude.json"
 BEGIN_MARKER = "<!-- BEGIN agentibridge -->"
 END_MARKER = "<!-- END agentibridge -->"
 
@@ -125,14 +128,104 @@ def _merge_claude_md() -> None:
     print(f"  [OK] Merged agentibridge block into {dst} ({len(body):,} bytes)")
 
 
+def _resolve_template_vars() -> dict[str, str]:
+    """Values substituted into package/.mcp.json at install time."""
+    return {
+        "AGENTIBRIDGE_BIN": shutil.which("agentibridge") or "agentibridge",
+        "PYTHON": shutil.which("python3") or "python3",
+        "ENV_FILE": str(Path.home() / ".agentibridge" / "agentibridge.env"),
+    }
+
+
+def _merge_mcp_to_user_scope(servers: dict) -> None:
+    """Merge ``servers`` into ``~/.claude.json`` ``mcpServers`` (last write wins per name)."""
+    existing: dict = {}
+    if CLAUDE_JSON.exists():
+        try:
+            existing = json.loads(CLAUDE_JSON.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"  [!!] Could not parse {CLAUDE_JSON}: {exc} — skipping MCP merge")
+            return
+    existing_servers: dict = existing.get("mcpServers", {})
+    added, updated = [], []
+    for name, config in servers.items():
+        if name in existing_servers:
+            if existing_servers[name] != config:
+                updated.append(name)
+        else:
+            added.append(name)
+        existing_servers[name] = config
+    existing["mcpServers"] = existing_servers
+    CLAUDE_JSON.write_text(json.dumps(existing, indent=2) + "\n")
+    if added:
+        print(f"  [OK] Added user-scope MCP servers: {', '.join(added)}")
+    if updated:
+        print(f"  [OK] Updated user-scope MCP servers: {', '.join(updated)}")
+    if not added and not updated:
+        print(f"  [--] User-scope MCP servers unchanged: {', '.join(servers.keys())}")
+
+
+def _remove_mcp_from_user_scope(server_names: list[str]) -> None:
+    if not CLAUDE_JSON.exists():
+        return
+    try:
+        existing = json.loads(CLAUDE_JSON.read_text())
+    except json.JSONDecodeError:
+        return
+    servers = existing.get("mcpServers", {})
+    removed = [name for name in server_names if servers.pop(name, None) is not None]
+    if not removed:
+        return
+    existing["mcpServers"] = servers
+    CLAUDE_JSON.write_text(json.dumps(existing, indent=2) + "\n")
+    print(f"  [RM] Removed user-scope MCP servers: {', '.join(removed)}")
+
+
+def _load_mcp_template() -> dict:
+    """Load and substitute placeholders in package/.mcp.json. Returns parsed dict."""
+    src = PACKAGE_DIR / ".mcp.json"
+    if not src.exists():
+        return {}
+    raw = src.read_text()
+    for key, value in _resolve_template_vars().items():
+        raw = raw.replace("${" + key + "}", value)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"  [!!] {src} parse failed after substitution: {exc}")
+        return {}
+
+
+def _install_mcp() -> None:
+    config = _load_mcp_template()
+    servers = config.get("mcpServers", {})
+    if servers:
+        _merge_mcp_to_user_scope(servers)
+
+
+def _uninstall_mcp() -> None:
+    """Remove the server names declared in package/.mcp.json from ~/.claude.json."""
+    src = PACKAGE_DIR / ".mcp.json"
+    if not src.exists():
+        return
+    try:
+        config = json.loads(src.read_text())
+    except json.JSONDecodeError:
+        return
+    servers = config.get("mcpServers", {})
+    if servers:
+        _remove_mcp_from_user_scope(list(servers.keys()))
+
+
 def install_claude_assets() -> None:
-    """Symlink package/{skills,commands,agents,rules}/ into ~/.claude/ and merge CLAUDE.md."""
+    """Symlink package/{skills,commands,agents,rules}/ into ~/.claude/, merge CLAUDE.md and MCP servers."""
     if not PACKAGE_DIR.is_dir():
         return
     print("Installing agentibridge Claude assets…")
     for subdir, label, filter_fn in _SUBDIRS:
         _symlink_dir_contents(PACKAGE_DIR / subdir, CLAUDE_HOME / subdir, label=label, filter_fn=filter_fn)
     _merge_claude_md()
+    _install_mcp()
 
 
 def _strip_claude_md_block() -> None:
@@ -173,3 +266,4 @@ def uninstall_claude_assets() -> None:
                 link.unlink()
                 print(f"  [RM] Removed {subdir}/{link.name}")
     _strip_claude_md_block()
+    _uninstall_mcp()

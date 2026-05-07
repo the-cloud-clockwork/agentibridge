@@ -846,6 +846,36 @@ CLAUDE_HOOK_LOG_ENABLED=true
     print(template)
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Run the MCP server in stdio (default) or sse mode.
+
+    Loads ``$AGENTIBRIDGE_ENV_FILE`` (or ``~/.agentibridge/agentibridge.env``) before
+    delegating to :func:`agentibridge.server.main`. Stdio mode is what
+    Claude Code spawns via the user-scope ``.mcp.json`` registration.
+    """
+    env_file = Path(os.getenv("AGENTIBRIDGE_ENV_FILE") or (Path.home() / ".agentibridge" / "agentibridge.env"))
+    if env_file.is_file():
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(env_file, override=False)
+        except ImportError:
+            for line in env_file.read_text().splitlines():
+                if not line or line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+    if args.stdio:
+        os.environ["AGENTIBRIDGE_TRANSPORT"] = "stdio"
+    elif args.sse:
+        os.environ["AGENTIBRIDGE_TRANSPORT"] = "sse"
+
+    from agentibridge.server import main as server_main
+
+    server_main()
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
 
@@ -1911,6 +1941,11 @@ def main() -> None:
     config_parser.add_argument("--generate-env", action="store_true", help="Print .env template")
 
     # install
+    serve_parser = subparsers.add_parser("serve", help="Run the MCP server (stdio for Claude Code, sse for HTTP)")
+    serve_group = serve_parser.add_mutually_exclusive_group()
+    serve_group.add_argument("--stdio", action="store_true", help="Run in stdio mode (default — for Claude Code)")
+    serve_group.add_argument("--sse", action="store_true", help="Run in SSE/HTTP mode")
+
     subparsers.add_parser("install", help="Install as systemd user service")
 
     # uninstall
@@ -1952,6 +1987,7 @@ def main() -> None:
         "connect": cmd_connect,
         "tunnel": cmd_tunnel,
         "config": cmd_config,
+        "serve": cmd_serve,
         "install": cmd_install,
         "uninstall": cmd_uninstall,
         "locks": cmd_locks,

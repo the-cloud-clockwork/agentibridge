@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "agentibridge-local": {
+      "type": "stdio",
+      "command": "${AGENTIBRIDGE_BIN}",
+      "args": [
+        "serve",
+        "--stdio"
+      ],
+      "env": {
+        "AGENTIBRIDGE_ENV_FILE": "${ENV_FILE}"
+      }
+    }
+  }
+}

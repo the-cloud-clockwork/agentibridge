@@ -3,7 +3,7 @@ name: session-handoff
 description: >
   Cross-project session handoff via MCP dispatch (primary) or memory file (fallback).
   Creates a resumable Claude session in the target project seeded with context from
-  the current conversation. If the home-bridge MCP is unavailable, falls back to
+  the current conversation. If the agentibridge-local MCP is unavailable, falls back to
   writing a dated memory file into the target project's auto-memory directory.
   Use when the user says "hand off to <repo>", "save handoff for <repo>",
   "make <repo> aware of what we did", or "so next session knows where we left off".
@@ -14,11 +14,11 @@ argument-hint: "<target-repo-path> [headline hint]"
 
 Hand off context from the current session to another project. Two paths:
 
-1. **MCP path (primary):** Call `home-bridge` `handoff` tool → spawns a Claude
+1. **MCP path (primary):** Call `agentibridge-local` `handoff` tool → spawns a Claude
    session in the target project seeded with the handoff content. Returns a
    `session_id` + `resume_command` the operator can use anytime.
 2. **Memory-file path (fallback):** Write a dated memory file into the target
-   project's auto-memory directory + index in MEMORY.md. Used when `home-bridge`
+   project's auto-memory directory + index in MEMORY.md. Used when `agentibridge-local`
    MCP is not available in the current session.
 
 **When NOT to use**: this is for cross-project context handoff. If you
@@ -99,7 +99,14 @@ this structure — every section is required unless noted:
 
 ## Step 4 — Dispatch: MCP primary path
 
-Try the `home-bridge` MCP `handoff` tool first. This is the preferred path.
+This skill is paired with the **`agentibridge-local`** MCP server (registered in
+`~/.claude.json` by `agentibridge install`). The primary path calls its
+`handoff` tool — exposed to Claude Code as **`mcp__agentibridge-local__handoff`**.
+
+Before attempting the call, confirm the tool is loaded in the current session.
+If `mcp__agentibridge-local__*` tools are not visible, skip directly to
+Step 4-fallback — do NOT try alternative server names (e.g. `agentibridge`,
+`agentibridge-development`, `home-bridge`); those are different deployments.
 
 ### 4A — Compose the handoff prompt
 
@@ -119,7 +126,7 @@ The operator will resume this session when ready.
 
 ### 4B — Call the MCP tool
 
-Call the `home-bridge` `handoff` MCP tool with:
+Call **`mcp__agentibridge-local__handoff`** with:
 
 - `prompt`: the composed handoff prompt from 4A
 - `project_path`: `TARGET_PATH` (the resolved absolute path)
@@ -142,7 +149,7 @@ error, timeout, or `success: false` in response) → fall through to Step 4-fall
 
 ## Step 4-fallback — Memory file (when MCP is unavailable)
 
-This is the existing memory-file pipeline. Used when `home-bridge` is not
+This is the existing memory-file pipeline. Used when `agentibridge-local` is not
 available or the MCP call fails.
 
 ### 4F-A — Write the handoff file
@@ -198,7 +205,7 @@ Go to Step 5 (fallback report).
 ```
 ## Handoff dispatched to <target-project-name>
 
-**Path:** MCP (home-bridge)
+**Path:** MCP (agentibridge-local)
 **Session ID:** <session_id>
 **Resume command:**
   cd <TARGET_PATH> && claude --resume <session_id>
@@ -219,7 +226,7 @@ Next likely asks (pre-answered in the handoff):
 ```
 ## Handoff saved to <target-project-name>
 
-**Path:** Memory file (home-bridge unavailable)
+**Path:** Memory file (agentibridge-local unavailable)
 **Memory file:** <absolute path to handoff file>
 **Indexed in:** <absolute path to MEMORY.md>
 
@@ -243,8 +250,8 @@ Next likely asks (pre-answered in the handoff):
 
 - **Target path doesn't exist** → stop in Step 1, tell the user.
 - **Target has no auto-memory directory** → Step 1 creates it (fallback path only).
-- **MCP tool not available** → silent fallback to memory-file path.
-- **MCP call returns `success: false`** → log the error, fall through to memory-file path.
+- **`mcp__agentibridge-local__handoff` not loaded in session** → silent fallback to memory-file path. Suggest `agentibridge install` to the operator only if they ask why the MCP path was skipped.
+- **MCP call returns `success: false` or errors out** → log the error, fall through to memory-file path.
 - **Current session has nothing to hand off** → refuse in Step 3.
 - **Operator runs this twice in one day for the same target** →
   MCP path: creates a new session (both are resumable).
