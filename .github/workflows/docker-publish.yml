@@ -10,7 +10,7 @@ jobs:
   # Skipped automatically on tag pushes — downstream job proceeds without waiting.
   gate:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: anton
     environment: release
     steps:
       - run: echo "Manual dispatch approved"

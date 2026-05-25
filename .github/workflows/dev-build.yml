@@ -25,7 +25,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: anton
     steps:
       - name: Lowercase image name
         run: echo "REPO_LC=${REPO_LC,,}" >> "$GITHUB_ENV"

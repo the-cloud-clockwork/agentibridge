@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: anton
     strategy:
       matrix:
         python-version: ["3.14"]
@@ -28,7 +28,7 @@ jobs:
         run: pytest tests/unit -v -m unit --cov=agentibridge --cov-report=term-missing --tb=short
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: anton
     steps:
       - uses: actions/checkout@v4
 
@@ -53,7 +53,7 @@ jobs:
     # in tests/integration/test_docker.py needs to be rewritten for the native
     # deployment model before this job can run again.
     if: false
-    runs-on: ubuntu-latest
+    runs-on: anton
     needs: [unit, lint]
     steps:
       - uses: actions/checkout@v4
