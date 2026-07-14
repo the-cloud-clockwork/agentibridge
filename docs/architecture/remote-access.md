@@ -15,7 +15,7 @@ AgentiBridge can be accessed remotely via SSE (Server-Sent Events) over HTTP, al
 |  claude.ai       | ----------------->|  AgentiBridge          |
 |  Mobile app      |   X-API-Key auth  |  SSE transport (:8100)   |
 |  API client      | <---------------- |                          |
-+------------------+     Events        |  All 16 MCP tools        |
++------------------+     Events        |  All 33 MCP tools        |
                                        |  + Redis backend         |
                                        +--------------------------+
 ```

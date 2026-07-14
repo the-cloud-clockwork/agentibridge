@@ -121,6 +121,16 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 | `AGENTIBRIDGE_MAX_MEMORY_CONTENT` | `51200` | Maximum bytes to read from a single memory file (50KB) |
 | `AGENTIBRIDGE_MAX_PLAN_CONTENT` | `102400` | Maximum bytes to read from a single plan file (100KB) |
 
+### Local Agents Configuration (Phase 6)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED` | `false` | Master toggle for session-gated local agent discovery + dispatch. Must be explicitly set to `true` |
+| `AGENTIHUB_DIR` | _(none)_ | AgentiHub checkout root containing `agents/`. Empty = auto-resolve by walking up for a sibling `agentihub/agents` directory |
+| `AGENTIBRIDGE_LOCAL_SESSION_TTL` | `3600` | Freshness window (seconds) for a local agent to count as "online" |
+
+**What enabling local agents does.** With the flag on, `list_agents` / `get_agent` / `find_agents` additionally scan `<AGENTIHUB_DIR>/agents/<name>/package/` for `CLAUDE.md` packages and merge them in transparently alongside registered HTTP agents — nothing is persisted to Redis or the file store, the catalog is computed fresh on every read. Each package's capability tags come from its `command.yml`. Liveness is session-gated, not heartbeat-gated: a package is `online` only while a live Claude session's working directory maps to it within `AGENTIBRIDGE_LOCAL_SESSION_TTL`, otherwise it's `idle`. Local agents are never `offline` — they are always callable, because dispatch cold-starts a fresh `claude` process in the package directory regardless of whether a session is currently live there.
+
 ### Logging Configuration
 
 | Variable | Default | Description |

@@ -93,7 +93,7 @@ AgentiBridge works from Claude Code CLI, claude.ai, ChatGPT, and any MCP client.
   <div class="feature-card">
     <img src="{{ '/assets/images/feature-multiclient.svg' | relative_url }}" alt="A2A + Multi-Client Fleet" class="feature-icon">
     <h3>A2A + Multi-Client</h3>
-    <p>Built-in Agent-to-Agent registry — agents register, heartbeat, discover peers by capability. Works with Claude Code CLI, claude.ai, ChatGPT, Grok, and any MCP client.</p>
+    <p>Built-in Agent-to-Agent registry — agents register, heartbeat, discover peers by capability. Session-gated local agents (AgentiHub packages found on disk) are always callable too — idle just means dispatch cold-starts a fresh claude session — and route by the same domain capability. Works with Claude Code CLI, claude.ai, ChatGPT, Grok, and any MCP client.</p>
   </div>
 </div>
 
@@ -200,6 +200,7 @@ That's it. Your Claude Code sessions are now searchable from any MCP-compatible 
 | `restore_session` | Load session context for continuation |
 | `dispatch_task` | Fire-and-forget background job dispatch |
 | `get_dispatch_job` | Poll a background job for status and output |
+| `list_dispatch_jobs` | List recent dispatch jobs, filterable by status |
 | `plan_task` / `execute_plan` / `get_dispatch_plan` / `list_dispatch_plans` | Plan-first workflows for longer tasks |
 | `list_handoff_projects` / `handoff` | Seed a conversation in another project with structured context |
 
@@ -219,6 +220,8 @@ That's it. Your Claude Code sessions are now searchable from any MCP-compatible 
 |:-----|:-------------|
 | `register_agent` / `heartbeat_agent` / `deregister_agent` | A2A lifecycle |
 | `list_agents` / `get_agent` / `find_agents` | Discover peers by type, status, or capability |
+| `discover_local_agents` | List local AgentiHub packages found on disk, with live/idle status |
+| `run_agent` / `dispatch_to_agent` | Route a task to a specific agent, or to the best match by capability |
 
 ---
 
