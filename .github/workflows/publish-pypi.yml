@@ -14,7 +14,7 @@ jobs:
   # Skipped automatically on tag pushes — downstream job proceeds without waiting.
   gate:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: anton
+    runs-on: ubuntu-latest
     environment: release
     steps:
       - run: echo "Manual dispatch approved"
@@ -22,7 +22,7 @@ jobs:
   publish:
     needs: gate
     if: always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
-    runs-on: anton
+    runs-on: ubuntu-latest
     environment: pypi
     steps:
       - uses: actions/checkout@v4
