@@ -1760,7 +1760,15 @@ def _update_docker_stack() -> None:
     # Capture current image digest
     old_digest = (
         subprocess.run(
-            ["docker", "images", "--digests", "--no-trunc", "--format", "{{.Digest}}", "ghcr.io/the-cloud-clockwork/agentibridge"],
+            [
+                "docker",
+                "images",
+                "--digests",
+                "--no-trunc",
+                "--format",
+                "{{.Digest}}",
+                "ghcr.io/the-cloud-clockwork/agentibridge",
+            ],
             capture_output=True,
             text=True,
         )
@@ -1778,7 +1786,15 @@ def _update_docker_stack() -> None:
     # Compare digests
     new_digest = (
         subprocess.run(
-            ["docker", "images", "--digests", "--no-trunc", "--format", "{{.Digest}}", "ghcr.io/the-cloud-clockwork/agentibridge"],
+            [
+                "docker",
+                "images",
+                "--digests",
+                "--no-trunc",
+                "--format",
+                "{{.Digest}}",
+                "ghcr.io/the-cloud-clockwork/agentibridge",
+            ],
             capture_output=True,
             text=True,
         )
