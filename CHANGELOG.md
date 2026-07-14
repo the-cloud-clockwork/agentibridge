@@ -120,6 +120,6 @@ whether or not a session is already running in them.
 - GitHub Actions CI/CD (test, build, publish, release)
 - PyPI package publishing
 
-[0.7.0]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.6.0...v0.7.0
+[0.7.0]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.6.1...v0.7.0
 [0.2.1]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/The-Cloud-Clockwork/agentibridge/releases/tag/v0.2.0
