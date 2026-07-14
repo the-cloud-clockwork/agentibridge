@@ -10,7 +10,7 @@ import asyncio
 import pytest
 
 import agentibridge.registry as registry_mod
-from agentibridge.registry import get_agent, list_agents, register_agent, route_to_agent
+from agentibridge.registry import get_agent, list_agents, register_agent, route_by_capability, route_to_agent
 
 
 @pytest.fixture
@@ -124,6 +124,64 @@ class TestGetAgentLocalFallback:
 
     def test_local_fallback_miss(self, temp_agents_dir, no_redis, no_local):
         assert get_agent("absent") is None
+
+
+@pytest.mark.unit
+class TestRouteByCapability:
+    def test_offline_local_agent_is_still_dispatchable(
+        self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch
+    ):
+        # A local agent with no live session must still receive capability-routed
+        # work — dispatch cold-starts it, same as direct run_agent.
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        rec = _local_rec("video-editor-agent", str(pkg), status="offline")
+        rec["capabilities"] = ["local", "agent:video-editor-agent", "video-editing"]
+        monkeypatch.setattr("agentibridge.local_agents.discover_local_agents", lambda *a, **k: [rec])
+        monkeypatch.setattr("agentibridge.local_agents.filter_records", lambda recs, *a, **k: recs)
+        monkeypatch.setattr("agentibridge.local_agents.get_local_agent", lambda agent_id, *a, **k: rec)
+
+        async def fake_dispatch(**k):
+            return {"dispatched": True, "job_id": "j1", "status": "running"}
+
+        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+
+        result = asyncio.run(route_by_capability("video-editing", "cut the intro"))
+        assert result["success"] is True
+        assert result["agent_id"] == "video-editor-agent"
+        assert result["routed_by"] == "capability"
+
+    def test_offline_http_agent_still_refused(self, temp_agents_dir, no_redis, no_local, monkeypatch):
+        # HTTP agents must still be online — an offline pod cannot take work.
+        register_agent("svc-1", endpoint="http://x", capabilities=["deploy"], heartbeat_ttl=1)
+        monkeypatch.setattr("agentibridge.registry._compute_effective_status", lambda d: "offline")
+        result = asyncio.run(route_by_capability("deploy", "ship it"))
+        assert result["success"] is False
+        assert "no available agents" in result["error"]
+
+    def test_online_preferred_over_offline(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
+        warm = tmp_path / "warm"
+        warm.mkdir()
+        cold = tmp_path / "cold"
+        cold.mkdir()
+        a_off = _local_rec("cold-agent", str(cold), status="offline")
+        a_off["capabilities"] = ["local", "agent:cold-agent", "media"]
+        a_on = _local_rec("warm-agent", str(warm), status="online")
+        a_on["capabilities"] = ["local", "agent:warm-agent", "media"]
+        monkeypatch.setattr("agentibridge.local_agents.discover_local_agents", lambda *a, **k: [a_off, a_on])
+        monkeypatch.setattr("agentibridge.local_agents.filter_records", lambda recs, *a, **k: recs)
+        monkeypatch.setattr(
+            "agentibridge.local_agents.get_local_agent",
+            lambda agent_id, *a, **k: a_on if agent_id == "warm-agent" else a_off,
+        )
+
+        async def fake_dispatch(**k):
+            return {"dispatched": True, "job_id": "j", "status": "running"}
+
+        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+
+        result = asyncio.run(route_by_capability("media", "task"))
+        assert result["agent_id"] == "warm-agent"  # warm session wins
 
 
 @pytest.mark.unit

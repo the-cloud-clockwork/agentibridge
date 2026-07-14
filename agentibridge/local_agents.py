@@ -200,6 +200,42 @@ def _session_liveness(package_path: str, store, ttl: int) -> Tuple[str, str, str
 # ---------------------------------------------------------------------------
 
 
+def read_package_manifest(package_path) -> dict:
+    """Read ``package/command.yml`` -> ``{display_name, description, capabilities}``.
+
+    This is where a local agent's *real* capabilities come from: the package
+    declares domain tags (``cost-analysis``, ``video-editing``, …) that an
+    orchestrator routes on via ``find_agents`` / ``dispatch_to_agent``.
+
+    Best-effort by design — a missing, unreadable, or malformed manifest yields
+    ``{}`` and the agent stays discoverable with its base tags. Package authoring
+    must never be able to break discovery.
+    """
+    manifest = Path(package_path) / "command.yml"
+    if not manifest.is_file():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(manifest.read_text()) or {}
+    except Exception as e:
+        log("local_agents: command.yml parse failed", {"package_path": str(package_path), "error": str(e)})
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    caps = data.get("capabilities")
+    if not isinstance(caps, list):
+        caps = []
+
+    return {
+        "display_name": str(data.get("name") or "").strip(),
+        "description": str(data.get("description") or "").strip(),
+        "capabilities": [str(c).strip() for c in caps if str(c).strip()],
+    }
+
+
 def _build_record(
     name: str,
     package_path: str,
@@ -207,19 +243,30 @@ def _build_record(
     last_activity: str,
     session_id: str,
     ttl: int,
+    manifest: Optional[dict] = None,
 ) -> dict:
     online = status == "online"
+    manifest = manifest or {}
+
+    # Base identity tags are always present; declared domain tags are appended
+    # (order-preserving, deduped) so find_agents("cost-analysis") can match.
+    caps = [LOCAL_TRANSPORT, f"agent:{name}"]
+    for c in manifest.get("capabilities", []):
+        if c not in caps:
+            caps.append(c)
+
     return {
         "agent_id": name,
-        "agent_name": name,
+        "agent_name": manifest.get("display_name") or name,
         "agent_type": LOCAL_AGENT_TYPE,
-        "capabilities": [LOCAL_TRANSPORT, f"agent:{name}"],
+        "capabilities": caps,
         "endpoint": "",
         "transport": LOCAL_TRANSPORT,
         "status": status,
         "metadata": {
             "source": "agentihub",
             "package_path": package_path,
+            "description": manifest.get("description", ""),
             "available_capacity": 1 if online else 0,
             "session_id": session_id,
             "last_activity": last_activity,
@@ -266,7 +313,8 @@ def discover_local_agents(agentihub_dir: str = "", *, store=None, ttl: Optional[
             continue
         pkg = str(package_path.resolve())
         status, last_activity, session_id = _session_liveness(pkg, store, ttl)
-        records.append(_build_record(entry.name, pkg, status, last_activity, session_id, ttl))
+        manifest = read_package_manifest(pkg)
+        records.append(_build_record(entry.name, pkg, status, last_activity, session_id, ttl, manifest))
 
     return records
 
@@ -311,7 +359,8 @@ def get_local_agent(agent_id: str, agentihub_dir: str = "", *, store=None, ttl: 
 
     pkg = str(pkg_resolved)
     status, last_activity, session_id = _session_liveness(pkg, store, ttl)
-    return _build_record(agent_id, pkg, status, last_activity, session_id, ttl)
+    manifest = read_package_manifest(pkg)
+    return _build_record(agent_id, pkg, status, last_activity, session_id, ttl, manifest)
 
 
 def filter_records(records: List[dict], agent_type: str = "", capability: str = "", status: str = "") -> List[dict]:

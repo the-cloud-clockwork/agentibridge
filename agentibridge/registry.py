@@ -558,17 +558,30 @@ async def route_by_capability(
     """Find best agent for a capability and forward the task."""
     agents = find_agents(capability)
 
-    # Filter online, sort by capacity
-    online = [a for a in agents if a.get("effective_status") == "online"]
-    if not online:
-        return {"success": False, "error": f"no online agents with capability: {capability}", "retry": True}
+    # HTTP agents must be online to serve — an offline pod cannot take work.
+    # Local (session-gated) agents stay candidates while offline: "offline" for
+    # them only means no live claude session, and dispatch cold-starts one. This
+    # keeps capability routing consistent with direct run_agent, which also
+    # cold-starts.
+    candidates = [a for a in agents if a.get("effective_status") == "online" or a.get("transport") == "local"]
+    if not candidates:
+        return {"success": False, "error": f"no available agents with capability: {capability}", "retry": True}
 
-    online.sort(key=lambda a: a.get("metadata", {}).get("available_capacity", 0), reverse=True)
+    # Prefer warm (online) agents, then the most available capacity.
+    candidates.sort(
+        key=lambda a: (
+            a.get("effective_status") == "online",
+            a.get("metadata", {}).get("available_capacity", 0),
+        ),
+        reverse=True,
+    )
 
-    best = online[0]
-    capacity = best.get("metadata", {}).get("available_capacity", 0)
-    if capacity <= 0:
-        return {"success": False, "error": "all agents at capacity", "retry": True}
+    best = candidates[0]
+    # The capacity gate applies to HTTP agents; a local cold-start has no queue.
+    if best.get("transport") != "local":
+        capacity = best.get("metadata", {}).get("available_capacity", 0)
+        if capacity <= 0:
+            return {"success": False, "error": "all agents at capacity", "retry": True}
 
     result = await route_to_agent(
         agent_id=best["agent_id"],

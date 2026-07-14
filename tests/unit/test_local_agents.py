@@ -60,6 +60,61 @@ def _pkg_encoded(hub, name):
     return encode_project_path(str((hub / "agents" / name / "package").resolve()))
 
 
+def _write_manifest(hub, name, text):
+    (hub / "agents" / name / "package" / "command.yml").write_text(text)
+
+
+@pytest.mark.unit
+class TestPackageManifest:
+    def test_capabilities_and_description_from_manifest(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["finops"])
+        _write_manifest(
+            hub,
+            "finops",
+            "name: FinOps\ndescription: AWS cost and billing analysis\n"
+            "capabilities:\n  - cost-analysis\n  - billing\nclaude:\n  model: opus\n",
+        )
+        rec = la.get_local_agent("finops", str(hub), store=FakeStore([]), ttl=3600)
+        assert rec["agent_name"] == "FinOps"
+        assert rec["metadata"]["description"] == "AWS cost and billing analysis"
+        assert rec["capabilities"] == ["local", "agent:finops", "cost-analysis", "billing"]
+
+    def test_missing_manifest_falls_back_to_base_tags(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["alpha"])
+        rec = la.get_local_agent("alpha", str(hub), store=FakeStore([]), ttl=3600)
+        assert rec["capabilities"] == ["local", "agent:alpha"]
+        assert rec["agent_name"] == "alpha"
+        assert rec["metadata"]["description"] == ""
+
+    def test_claude_only_manifest_is_fine(self, tmp_path, enable_local):
+        # This is what 7 of the 8 real packages look like today.
+        hub = _make_hub(tmp_path, ["alpha"])
+        _write_manifest(hub, "alpha", "claude:\n  model: opus\n  max_turns: 100\n")
+        rec = la.get_local_agent("alpha", str(hub), store=FakeStore([]), ttl=3600)
+        assert rec["capabilities"] == ["local", "agent:alpha"]
+
+    def test_malformed_yaml_does_not_break_discovery(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["alpha"])
+        _write_manifest(hub, "alpha", "name: [unclosed\n  bad: :\n")
+        rec = la.get_local_agent("alpha", str(hub), store=FakeStore([]), ttl=3600)
+        assert rec is not None  # still discoverable
+        assert rec["capabilities"] == ["local", "agent:alpha"]
+
+    def test_non_list_capabilities_ignored(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["alpha"])
+        _write_manifest(hub, "alpha", "capabilities: not-a-list\nclaude:\n  model: opus\n")
+        rec = la.get_local_agent("alpha", str(hub), store=FakeStore([]), ttl=3600)
+        assert rec["capabilities"] == ["local", "agent:alpha"]
+
+    def test_capability_routing_matches_declared_tag(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["finops", "linkedin"])
+        _write_manifest(hub, "finops", "capabilities:\n  - cost-analysis\n")
+        _write_manifest(hub, "linkedin", "capabilities:\n  - content-publishing\n")
+        recs = la.discover_local_agents(str(hub), store=FakeStore([]), ttl=3600)
+        hits = filter_records(recs, capability="cost-analysis")
+        assert [h["agent_id"] for h in hits] == ["finops"]
+
+
 @pytest.mark.unit
 class TestEncodeProjectPath:
     def test_basic(self):
