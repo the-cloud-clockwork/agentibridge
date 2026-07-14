@@ -194,6 +194,20 @@ Alongside registered A2A peers, AgentiBridge also discovers **local agents**: Ag
 - **Discovery**: `discover_local_agents(status="")` lists them directly, including the resolved AgentiHub path and whether the feature is enabled.
 - **Dispatch**: `run_agent` (by id) and `dispatch_to_agent` (by capability) both spawn a fresh `claude` CLI process in the package directory when they route to a local agent.
 
+**Enabling it** — three variables in `~/.agentibridge/agentibridge.env`:
+
+```bash
+AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true   # default false — nothing is discovered until this is on
+AGENTIHUB_DIR=/path/to/agentihub         # the dir CONTAINING agents/ — not agents/ itself
+AGENTIBRIDGE_LOCAL_SESSION_TTL=3600      # optional: how long a session counts as "online"
+```
+
+`AGENTIHUB_DIR` may be left unset in a standard ecosystem checkout — it auto-resolves by walking up for a sibling `agentihub/agents/`. Set it explicitly when the hub lives anywhere else.
+
+That one file feeds **both** the systemd SSE server and every `agentibridge serve --stdio` MCP process. Variables in `~/.env` do **not** reach the stdio servers.
+
+Verify with `discover_local_agents` — it reports the resolved AgentiHub path and whether the feature is enabled, so you can tell "no agents found" from "the feature is off".
+
 ---
 
 ## Configuration
