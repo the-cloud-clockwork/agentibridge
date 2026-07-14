@@ -312,6 +312,7 @@ async def _handle_agents_request(scope, receive, send):
                 endpoint=body.get("endpoint", ""),
                 metadata=body.get("metadata", {}),
                 heartbeat_ttl=body.get("heartbeat_ttl", 300),
+                transport=body.get("transport", "http"),
             )
             await _json_response(send, {"success": True, **result})
             return

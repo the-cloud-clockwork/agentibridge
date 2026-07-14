@@ -1190,6 +1190,7 @@ def register_agent(
     endpoint: str = "",
     metadata: str = "{}",
     heartbeat_ttl: int = 300,
+    transport: str = "http",
 ) -> str:
     """Register an agent for A2A discovery.
 
@@ -1201,9 +1202,13 @@ def register_agent(
         agent_name: Human-readable name
         agent_type: Category (e.g., "executor", "observer", "specialist")
         capabilities: JSON array of capability strings
-        endpoint: How to reach this agent (URL)
-        metadata: JSON object with arbitrary key-value pairs
+        endpoint: How to reach this agent (URL). Empty for local transport.
+        metadata: JSON object with arbitrary key-value pairs. For transport
+            "local", include "package_path" so tasks can be dispatched by
+            spawning claude in that directory.
         heartbeat_ttl: Seconds before agent is considered offline (default: 300)
+        transport: Delivery transport — "http" (POST endpoint/jobs, default) or
+            "local" (spawn a fresh claude in metadata.package_path)
 
     Returns:
         JSON with registration result
@@ -1221,6 +1226,7 @@ def register_agent(
             endpoint=endpoint,
             metadata=meta,
             heartbeat_ttl=heartbeat_ttl,
+            transport=transport,
         )
         return json.dumps({"success": True, **result})
     except Exception as e:
@@ -1357,6 +1363,54 @@ def find_agents(capability: str) -> str:
         )
     except Exception as e:
         log("MCP find_agents failed", {"capability": capability, "error": str(e)})
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+def discover_local_agents(status: str = "") -> str:
+    """Discover session-gated local agents (AgentiHub packages) on this host.
+
+    Local agents are Claude Code packages under
+    ``<AGENTIHUB_DIR>/agents/<name>/package/``. They are discovered by scanning
+    the filesystem (never persisted) and their liveness is derived from whether
+    a live claude session is running in the package directory. Requires
+    AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true.
+
+    Args:
+        status: Optional filter by effective status ("online", "offline")
+
+    Returns:
+        JSON with the resolved agentihub path, whether the feature is enabled,
+        and the list of local agents with effective_status
+    """
+    try:
+        from agentibridge.local_agents import (
+            discover_local_agents as _discover,
+            filter_records,
+            local_agents_enabled,
+            resolve_agentihub_dir,
+        )
+        from agentibridge.registry import _list_registered
+
+        hub = resolve_agentihub_dir()
+        agents = filter_records(_discover(), status=status)
+        # A registered record of the same id wins in get_agent/route_to_agent, so
+        # mark shadowed entries — otherwise this tool would advertise a local
+        # dispatch that would actually be routed to the registered record.
+        registered_ids = {a.get("agent_id") for a in _list_registered(limit=1000)}
+        for a in agents:
+            a["metadata"]["shadowed_by_registered"] = a["agent_id"] in registered_ids
+        return json.dumps(
+            {
+                "success": True,
+                "enabled": local_agents_enabled(),
+                "agentihub": str(hub) if hub else None,
+                "count": len(agents),
+                "agents": agents,
+            }
+        )
+    except Exception as e:
+        log("MCP discover_local_agents failed", {"error": str(e)})
         return json.dumps({"success": False, "error": str(e)})
 
 
