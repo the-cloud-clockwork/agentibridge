@@ -12,7 +12,7 @@ This document provides a deep dive into AgentiBridge's internal modules and impl
 
 | Module | Purpose | Key Functions/Classes |
 |--------|---------|----------------------|
-| `server.py` | FastMCP server with 16 tools | tool handlers, `main()` |
+| `server.py` | FastMCP server with 33 tools | tool handlers, `main()` |
 | `parser.py` | Pure-function JSONL transcript parser | `parse_transcript_entries()`, `scan_projects_dir()` |
 | `store.py` | SessionStore (Redis + filesystem fallback) | `SessionStore`, `get_session_meta()`, `list_sessions()` |
 | `collector.py` | Background polling daemon | `SessionCollector`, `collect_once()` |
@@ -29,6 +29,10 @@ This document provides a deep dive into AgentiBridge's internal modules and impl
 | `cli.py` | CLI helper tool | `run`, `stop`, `status`, `tunnel`, `bridge`, `locks` |
 | `catalog.py` | Knowledge catalog: memory, plans, history | `scan_memory_files()`, `scan_plans_dir()`, `parse_history()` |
 | `logging.py` | Structured JSON logging | `log()` |
+| `registry.py` | A2A agent registry: register/heartbeat/route (Phase 6) | `AgentRecord`, `register_agent()`, `list_agents()`, `route_to_agent()`, `route_by_capability()` |
+| `local_agents.py` | Session-gated local agent discovery (Phase 6) | `discover_local_agents()`, `get_local_agent()`, `read_package_manifest()` |
+| `plans.py` | Plan-then-execute dispatch workflow | `submit_plan()`, `execute_plan()`, `list_plans()`, `get_plan_status()` |
+| `claude_assets.py` | Installs bundled skills/commands/agents/rules into `~/.claude/` | `install_claude_assets()`, `uninstall_claude_assets()` |
 
 ## Redis + File Fallback Pattern
 

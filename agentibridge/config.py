@@ -135,3 +135,26 @@ AGENTIBRIDGE_MAX_HISTORY_ENTRIES = _env_int("AGENTIBRIDGE_MAX_HISTORY_ENTRIES", 
 AGENTIBRIDGE_MAX_MEMORY_CONTENT = _env_int("AGENTIBRIDGE_MAX_MEMORY_CONTENT", "51200", min_val=1024)
 
 AGENTIBRIDGE_MAX_PLAN_CONTENT = _env_int("AGENTIBRIDGE_MAX_PLAN_CONTENT", "102400", min_val=1024)
+
+# =============================================================================
+# AGENTIBRIDGE — LOCAL AGENTS (Phase 6)
+# =============================================================================
+# Session-gated local agent discovery. A "local agent" is a purpose-built
+# Claude Code package on disk under an AgentiHub checkout
+# (``<AGENTIHUB_DIR>/agents/<name>/package/CLAUDE.md``). Unlike service agents
+# (HTTP endpoint + heartbeat), local agents are discovered by scanning the
+# filesystem and their liveness is derived from whether a live ``claude``
+# session is running in the package directory.
+
+# Master toggle for local agent discovery + dispatch. Default off — existing
+# deployments see no behavior change until this is explicitly enabled.
+AGENTIBRIDGE_LOCAL_AGENTS_ENABLED = _env_bool("AGENTIBRIDGE_LOCAL_AGENTS_ENABLED", "false")
+
+# AgentiHub checkout root (contains an ``agents/`` subdir). Empty = auto-resolve
+# via sibling-directory discovery. Same "empty means unset" convention as
+# OAUTH_ISSUER_URL — no universal default location, so never guessed here.
+AGENTIHUB_DIR = os.getenv("AGENTIHUB_DIR", "")
+
+# Freshness window (seconds) for calling a local agent "online": a package is
+# online only if a claude session in its dir was active within this window.
+AGENTIBRIDGE_LOCAL_SESSION_TTL = _env_int("AGENTIBRIDGE_LOCAL_SESSION_TTL", "3600", min_val=1)

@@ -28,6 +28,7 @@ class AgentRecord:
     agent_type: str = ""
     capabilities: list = field(default_factory=list)
     endpoint: str = ""
+    transport: str = "http"
     status: str = "online"
     metadata: dict = field(default_factory=dict)
     registered_at: str = ""
@@ -209,6 +210,7 @@ def register_agent(
     endpoint: str = "",
     metadata: Optional[dict] = None,
     heartbeat_ttl: int = _DEFAULT_HEARTBEAT_TTL,
+    transport: str = "http",
 ) -> dict:
     if not agent_id or not agent_id.strip():
         raise ValueError("agent_id is required and cannot be empty")
@@ -241,6 +243,7 @@ def register_agent(
             agent_type=agent_type,
             capabilities=caps,
             endpoint=endpoint,
+            transport=transport,
             status="online",
             metadata=meta,
             registered_at=registered_at,
@@ -304,12 +307,19 @@ def get_agent(agent_id: str) -> Optional[dict]:
     if data is None:
         data = _read_file(agent_id)
     if data is None:
-        return None
+        # Fall back to computed (session-gated) local agents — never persisted.
+        try:
+            from agentibridge.local_agents import get_local_agent
+
+            return get_local_agent(agent_id)
+        except Exception as e:  # pragma: no cover - defensive
+            log("registry: local get_agent failed", {"agent_id": agent_id, "error": str(e)})
+            return None
     data["effective_status"] = _compute_effective_status(data)
     return data
 
 
-def list_agents(
+def _list_registered(
     agent_type: str = "",
     capability: str = "",
     status: str = "",
@@ -351,6 +361,56 @@ def list_agents(
     return _list_files(agent_type, capability, status, limit)
 
 
+def _merge_local_agents(
+    agents: List[dict],
+    agent_type: str,
+    capability: str,
+    status: str,
+    limit: int,
+) -> List[dict]:
+    """Append computed (session-gated) local agents, deduped by agent_id.
+
+    Registered agents (Redis/file) take precedence on id collision. No-op when
+    the local-agents feature is disabled — discover_local_agents returns [].
+    """
+    try:
+        from agentibridge.local_agents import discover_local_agents, filter_records
+
+        local = filter_records(discover_local_agents(), agent_type, capability, status)
+    except Exception as e:  # pragma: no cover - defensive
+        log("registry: local agent merge failed", {"error": str(e)})
+        return agents
+
+    if not local:
+        return agents[:limit]
+
+    existing = {a.get("agent_id") for a in agents}
+    fresh = [rec for rec in local if rec.get("agent_id") not in existing]
+    if not fresh:
+        return agents[:limit]
+
+    if len(agents) + len(fresh) <= limit:
+        return agents + fresh  # common case — everyone fits under the cap
+
+    # Over the cap: local packages are a small, bounded set and are the feature
+    # being surfaced here, so guarantee them a place rather than letting a full
+    # registered slice silently starve them (route_by_capability funnels through
+    # here too). Registered agents keep priority for the remaining slots.
+    reserved = min(len(fresh), limit)
+    keep_registered = agents[: max(0, limit - reserved)]
+    return keep_registered + fresh[:reserved]
+
+
+def list_agents(
+    agent_type: str = "",
+    capability: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> List[dict]:
+    agents = _list_registered(agent_type, capability, status, limit)
+    return _merge_local_agents(agents, agent_type, capability, status, limit)
+
+
 def find_agents(capability: str) -> List[dict]:
     return list_agents(capability=capability)
 
@@ -358,6 +418,68 @@ def find_agents(capability: str) -> List[dict]:
 # ---------------------------------------------------------------------------
 # Agent routing — forward tasks to discovered agents
 # ---------------------------------------------------------------------------
+
+
+async def _route_to_local_agent(agent_id: str, task: str, *, wait: bool = False) -> dict:
+    """Deliver a task to a local agent by spawning a fresh ``claude`` in its dir.
+
+    ``wait=False`` (default) fire-and-forgets via ``dispatch_task`` and returns a
+    job_id immediately. ``wait=True`` blocks via ``run_claude`` until the run
+    completes and returns its result. Cold-start is always allowed here (liveness
+    is advisory), but two guards are NOT optional:
+
+    - Hard-gated on ``AGENTIBRIDGE_LOCAL_AGENTS_ENABLED`` — a persisted
+      ``transport=local`` card cannot enable dispatch while the feature is off.
+    - The package directory is re-derived from the filesystem scan via
+      ``local_agents.get_local_agent`` (which only returns real, contained
+      ``<hub>/agents/<id>/package`` dirs), NOT taken from the persisted record's
+      ``metadata.package_path``. This prevents a forged registry entry from
+      running claude in an arbitrary host directory.
+    """
+    import os
+
+    from agentibridge import local_agents
+
+    if not local_agents.local_agents_enabled():
+        return {
+            "success": False,
+            "error": "local agents are disabled (set AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true)",
+            "agent_id": agent_id,
+        }
+    if not task or not task.strip():
+        return {"success": False, "error": "task is required", "agent_id": agent_id}
+
+    resolved = local_agents.get_local_agent(agent_id)
+    if resolved is None:
+        return {"success": False, "error": f"no local agent package for id: {agent_id}", "agent_id": agent_id}
+    package_path = resolved.get("metadata", {}).get("package_path", "")
+    if not package_path or not Path(package_path).is_dir():
+        return {"success": False, "error": f"local agent has no valid package_path: {agent_id}", "agent_id": agent_id}
+
+    try:
+        if wait:
+            from agentibridge.claude_runner import run_claude
+
+            timeout_s = int(float(os.getenv("AGENTIBRIDGE_AGENT_TIMEOUT", "600")))
+            res = await run_claude(prompt=task, cwd=package_path, timeout=timeout_s)
+            return {
+                "success": res.success,
+                "agent_id": agent_id,
+                "transport": "local",
+                "package_path": package_path,
+                "result": res.result,
+                "session_id": res.session_id,
+                "timed_out": res.timed_out,
+                "error": res.error,
+            }
+
+        from agentibridge.dispatch import dispatch_task
+
+        result = await dispatch_task(task_description=task, project=package_path)
+        return {"success": True, "agent_id": agent_id, "transport": "local", "package_path": package_path, **result}
+    except Exception as e:
+        log("registry: local dispatch failed", {"agent_id": agent_id, "error": str(e)})
+        return {"success": False, "error": str(e), "agent_id": agent_id}
 
 
 async def route_to_agent(
@@ -374,6 +496,13 @@ async def route_to_agent(
     agent = get_agent(agent_id)
     if agent is None:
         return {"success": False, "error": f"agent not found: {agent_id}"}
+
+    # Local (session-gated package) agents: spawn a fresh claude in the package
+    # dir. A cold start is always allowed, so we branch BEFORE the online /
+    # capacity / endpoint checks below — liveness is advisory for discovery only.
+    if agent.get("transport") == "local":
+        return await _route_to_local_agent(agent_id, task, wait=wait)
+
     if agent.get("effective_status") != "online":
         return {"success": False, "error": f"agent offline: {agent_id}"}
 
@@ -429,17 +558,30 @@ async def route_by_capability(
     """Find best agent for a capability and forward the task."""
     agents = find_agents(capability)
 
-    # Filter online, sort by capacity
-    online = [a for a in agents if a.get("effective_status") == "online"]
-    if not online:
-        return {"success": False, "error": f"no online agents with capability: {capability}", "retry": True}
+    # HTTP agents must be online to serve — an offline pod cannot take work.
+    # Local (session-gated) agents stay candidates while offline: "offline" for
+    # them only means no live claude session, and dispatch cold-starts one. This
+    # keeps capability routing consistent with direct run_agent, which also
+    # cold-starts.
+    candidates = [a for a in agents if a.get("effective_status") == "online" or a.get("transport") == "local"]
+    if not candidates:
+        return {"success": False, "error": f"no available agents with capability: {capability}", "retry": True}
 
-    online.sort(key=lambda a: a.get("metadata", {}).get("available_capacity", 0), reverse=True)
+    # Prefer warm (online) agents, then the most available capacity.
+    candidates.sort(
+        key=lambda a: (
+            a.get("effective_status") == "online",
+            a.get("metadata", {}).get("available_capacity", 0),
+        ),
+        reverse=True,
+    )
 
-    best = online[0]
-    capacity = best.get("metadata", {}).get("available_capacity", 0)
-    if capacity <= 0:
-        return {"success": False, "error": "all agents at capacity", "retry": True}
+    best = candidates[0]
+    # The capacity gate applies to HTTP agents; a local cold-start has no queue.
+    if best.get("transport") != "local":
+        capacity = best.get("metadata", {}).get("available_capacity", 0)
+        if capacity <= 0:
+            return {"success": False, "error": "all agents at capacity", "retry": True}
 
     result = await route_to_agent(
         agent_id=best["agent_id"],

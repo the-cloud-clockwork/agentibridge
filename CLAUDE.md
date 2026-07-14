@@ -22,7 +22,7 @@ ruff format --check agentibridge/ tests/
 ## Architecture
 
 ```
-MCP Server (server.py) — 29 tools
+MCP Server (server.py) — 33 tools
   Phase 1: list/get/search sessions
   Phase 2: semantic search + summary
   Phase 3: SSE/HTTP transport + auth
@@ -64,6 +64,7 @@ Host (native)                    Docker (databases only)
 | `collector.py` | Background polling daemon |
 | `transport.py` | SSE/HTTP transport + REST endpoints |
 | `registry.py` | A2A agent registry (Phase 6) |
+| `local_agents.py` | Session-gated local agent discovery — AgentiHub packages on disk |
 | `oauth_provider.py` | OAuth 2.1 authorization server (opt-in) |
 | `embeddings.py` | Semantic search (Phase 2) |
 | `dispatch.py` | Background job dispatch, session restore, handoff |
@@ -93,12 +94,15 @@ LLM_EMBED_MODEL=text-embedding-3-small
 LLM_CHAT_MODEL=gpt-4o-mini
 CLAUDE_BINARY=/path/to/claude       # absolute path, set by `agentibridge install`
 AGENTIBRIDGE_HEARTBEAT_TTL=120
+AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=false  # feature flag for local (session-gated) agent discovery
+AGENTIHUB_DIR=                      # empty = auto-resolve by walking up for a sibling agentihub/agents dir
+AGENTIBRIDGE_LOCAL_SESSION_TTL=3600 # seconds a live claude session keeps a package "online"
 ```
 
-## MCP Tools (29 total)
+## MCP Tools (33 total)
 
 ### Phase 1 — Foundation
-`list_sessions`, `get_session`, `get_session_segment`, `get_session_actions`, `search_sessions`, `collect_now`
+`list_sessions`, `get_session`, `get_session_segment`, `get_session_actions`, `search_sessions`, `agent_search`, `collect_now`
 
 ### Phase 2 — Semantic Search
 `search_semantic`, `generate_summary`
@@ -110,7 +114,7 @@ AGENTIBRIDGE_HEARTBEAT_TTL=120
 `list_memory_files`, `get_memory_file`, `list_plans`, `get_plan`, `search_history`
 
 ### Phase 6 — A2A Agent Registry
-`register_agent`, `deregister_agent`, `heartbeat_agent`, `list_agents`, `get_agent`, `find_agents`
+`register_agent`, `deregister_agent`, `heartbeat_agent`, `list_agents`, `get_agent`, `find_agents`, `discover_local_agents`, `run_agent`, `dispatch_to_agent`
 
 ### Handoff — Cross-project Context Transfer
 - `list_handoff_projects` — Discover projects from `~/.claude/projects/` with session counts
@@ -132,7 +136,20 @@ AGENTIBRIDGE_HEARTBEAT_TTL=120
 - `idx:agents` — Sorted set by `last_heartbeat`
 - `idx:agents:cap:{capability}` — Set of agent_ids per capability
 
-**Auto-offline:** if `last_heartbeat` age exceeds `heartbeat_ttl`, `effective_status` returns `"offline"` at read time — no writes needed.
+**Auto-offline:** applies to registered (HTTP) agents only — if `last_heartbeat` age exceeds `heartbeat_ttl`, `effective_status` returns `"offline"` at read time, no writes needed. Local agents (below) are never `"offline"`.
+
+### Local Agents (session-gated)
+
+**Module:** `agentibridge/local_agents.py` — no registry entry, no persistence.
+
+A "local agent" is an AgentiHub package on disk: `<AGENTIHUB_DIR>/agents/<name>/package/CLAUDE.md`. Unlike registered agents, local agents are **computed at read time** (filesystem scan + session-store liveness check), never written to Redis or the file store. `list_agents` / `get_agent` / `find_agents` merge them in transparently when `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true`.
+
+- **Liveness is session-gated, not a reachability gate.** A package is `"online"` only while a live `claude` session's cwd maps to the package dir within `AGENTIBRIDGE_LOCAL_SESSION_TTL`; otherwise `"idle"`. Local agents are **never** `"offline"` — they are always callable, since dispatch cold-starts a fresh `claude` in the package dir. Records carry `dispatchable=true`, `available_capacity=1`, `metadata.session_live`, `metadata.cold_start_on_dispatch`.
+- **`AgentRecord.transport`** — `"http"` (default; POST to `endpoint`/jobs) or `"local"` (spawn `claude` in `metadata.package_path`).
+- **Capability tags** come from each package's `command.yml` (`name`, `description`, `capabilities`). `name` is the canonical package ID (read by agentihooks `install.py`), not a display label. `find_agents(capability=...)` / `dispatch_to_agent(capability=...)` route on these real domain tags (`cost-analysis`, `video-editing`, `content-drafting`, ...).
+- **Routing:** `route_by_capability` keeps local agents as candidates while `"idle"` (cold-start covers it); HTTP agents still require `"online"`; warm (`"online"`) agents are preferred over cold ones.
+- **Tool:** `discover_local_agents(status="")` — direct enumeration, bypassing the merged `list_agents` view.
+- **Security:** local dispatch is gated on the feature flag AND re-derives `package_path` from the filesystem scan at call time — never trusts a persisted record's `package_path` — with containment checks against the resolved AgentiHub root.
 
 ## Related Projects
 
@@ -140,6 +157,7 @@ AGENTIBRIDGE_HEARTBEAT_TTL=120
 |---------|-------------|
 | **agenticore** | Parent orchestration project |
 | **agentihooks** | Hook system & MCP tool server for Claude Code agents |
+| **agentihub** | Source of local agent packages + their `command.yml` capability manifests |
 
 ## Redis + File Fallback Pattern
 

@@ -1190,6 +1190,7 @@ def register_agent(
     endpoint: str = "",
     metadata: str = "{}",
     heartbeat_ttl: int = 300,
+    transport: str = "http",
 ) -> str:
     """Register an agent for A2A discovery.
 
@@ -1201,9 +1202,13 @@ def register_agent(
         agent_name: Human-readable name
         agent_type: Category (e.g., "executor", "observer", "specialist")
         capabilities: JSON array of capability strings
-        endpoint: How to reach this agent (URL)
-        metadata: JSON object with arbitrary key-value pairs
+        endpoint: How to reach this agent (URL). Empty for local transport.
+        metadata: JSON object with arbitrary key-value pairs. For transport
+            "local", include "package_path" so tasks can be dispatched by
+            spawning claude in that directory.
         heartbeat_ttl: Seconds before agent is considered offline (default: 300)
+        transport: Delivery transport — "http" (POST endpoint/jobs, default) or
+            "local" (spawn a fresh claude in metadata.package_path)
 
     Returns:
         JSON with registration result
@@ -1221,6 +1226,7 @@ def register_agent(
             endpoint=endpoint,
             metadata=meta,
             heartbeat_ttl=heartbeat_ttl,
+            transport=transport,
         )
         return json.dumps({"success": True, **result})
     except Exception as e:
@@ -1361,6 +1367,59 @@ def find_agents(capability: str) -> str:
 
 
 @mcp.tool()
+def discover_local_agents(status: str = "") -> str:
+    """Discover session-gated local agents (AgentiHub packages) on this host.
+
+    Local agents are Claude Code packages under
+    ``<AGENTIHUB_DIR>/agents/<name>/package/``, discovered by scanning the
+    filesystem (never persisted). Requires AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true.
+
+    EVERY local agent returned here is callable via run_agent / dispatch_to_agent,
+    regardless of status. Status conveys WARMTH, not reachability:
+      - "online" — a claude session is live in its package dir right now.
+      - "idle"   — no live session; dispatch cold-starts a fresh claude.
+    "idle" is NOT "offline" and NOT an error. Never warn the user that a call
+    "may fail to reach" an idle agent — it will succeed.
+
+    Args:
+        status: Optional filter by status ("online", "idle")
+
+    Returns:
+        JSON with the resolved agentihub path, whether the feature is enabled,
+        and the list of local agents with effective_status
+    """
+    try:
+        from agentibridge.local_agents import (
+            discover_local_agents as _discover,
+            filter_records,
+            local_agents_enabled,
+            resolve_agentihub_dir,
+        )
+        from agentibridge.registry import _list_registered
+
+        hub = resolve_agentihub_dir()
+        agents = filter_records(_discover(), status=status)
+        # A registered record of the same id wins in get_agent/route_to_agent, so
+        # mark shadowed entries — otherwise this tool would advertise a local
+        # dispatch that would actually be routed to the registered record.
+        registered_ids = {a.get("agent_id") for a in _list_registered(limit=1000)}
+        for a in agents:
+            a["metadata"]["shadowed_by_registered"] = a["agent_id"] in registered_ids
+        return json.dumps(
+            {
+                "success": True,
+                "enabled": local_agents_enabled(),
+                "agentihub": str(hub) if hub else None,
+                "count": len(agents),
+                "agents": agents,
+            }
+        )
+    except Exception as e:
+        log("MCP discover_local_agents failed", {"error": str(e)})
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
 async def run_agent(
     agent_id: str,
     task: str,
@@ -1371,11 +1430,17 @@ async def run_agent(
 ) -> str:
     """Route a task to a specific registered agent.
 
-    Looks up the agent in the registry, checks it's online and has capacity,
-    then forwards the task to its REST API. Returns job_id from the target agent.
+    LOCAL AGENTS (transport="local", agent_type="local") ARE ALWAYS CALLABLE —
+    including when their status is "idle". "idle" means only that no claude
+    session is currently running in the agent's package dir; dispatch cold-starts
+    a fresh one. Do NOT hedge, warn, or skip the call because an agent is idle.
+    Only HTTP agents require "online" (an offline pod genuinely cannot serve).
+
+    For HTTP agents: looks up the agent, checks it's online and has capacity, then
+    forwards the task to its REST API. Returns job_id from the target agent.
 
     Args:
-        agent_id: Target agent identifier (e.g., "agenticore-0", "publishing-agent-0")
+        agent_id: Target agent identifier (e.g., "finops", "agenticore-0")
         task: What the agent should do
         profile: Execution profile (optional — agent uses its default if omitted)
         repo_url: GitHub repo URL (optional)
@@ -1413,9 +1478,10 @@ async def dispatch_to_agent(
 ) -> str:
     """Route a task to the best available agent with a specific capability.
 
-    Finds all online agents with the capability, picks the one with most
-    available capacity, and forwards the task. Returns job_id from the
-    selected agent.
+    Local agents are candidates even when "idle" — dispatch cold-starts a fresh
+    claude in their package dir, so an idle local agent is fully callable. A warm
+    (online) agent is preferred when several share the capability. Only HTTP
+    agents must be online to be selected.
 
     Args:
         capability: Required capability (e.g., "profile:coding", "agent:publishing", "agent_mode")

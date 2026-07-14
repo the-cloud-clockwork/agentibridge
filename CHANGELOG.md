@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — Phase 6: Session-gated local agents (A2A)
+
+Local "purpose-built" agent packages from an AgentiHub checkout are now
+first-class A2A citizens: discoverable, routable by capability, and callable
+whether or not a session is already running in them.
+
+- **`local_agents.py`** (new) — discovers agent packages at
+  `<AGENTIHUB_DIR>/agents/<name>/package/CLAUDE.md`. Local agents are *computed*
+  at read time (filesystem scan + session-store liveness), never persisted.
+- **Session-gated liveness** — a package is `online` only while a live `claude`
+  session's cwd maps to it (within `AGENTIBRIDGE_LOCAL_SESSION_TTL`), otherwise
+  `idle`. Derived from the existing session store; no heartbeats required.
+- **`transport` field on `AgentRecord`** (default `"http"`, back-compatible).
+  `transport="local"` dispatches by spawning a fresh `claude` in the package dir.
+- **Capability tags** — read from each package's `command.yml` (`capabilities`,
+  `name`, `description`), so `find_agents(capability=…)` and
+  `dispatch_to_agent(capability=…)` route on what an agent actually does.
+  Malformed/missing manifests degrade gracefully to base tags.
+- **`discover_local_agents` MCP tool** — lists local agents, marks any shadowed
+  by a same-id registered record.
+- New config: `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED` (default `false`),
+  `AGENTIHUB_DIR`, `AGENTIBRIDGE_LOCAL_SESSION_TTL` (default 3600).
+- New dependency: `pyyaml` (was previously only transitively available).
+
+### Changed
+
+- **`route_by_capability`** — local agents remain candidates while `idle`;
+  dispatch cold-starts them. HTTP agents still require `online`. Warm (online)
+  agents are preferred, then capacity.
+- **Local agents report `idle`, never `offline`.** In an agent registry
+  "offline" means *unreachable* and `available_capacity: 0` means *at capacity* —
+  LLM callers read those literally and refused/hedged on dispatches that in fact
+  succeed. Local agents are never unreachable, so status now conveys *warmth*
+  only (`online` / `idle`), and records advertise `dispatchable: true`,
+  `available_capacity: 1`, `session_live`, `cold_start_on_dispatch`, and a
+  `dispatch_hint`. Tool descriptions state this explicitly, since LLM callers
+  read them before deciding whether to call.
+
+### Security
+
+- Local dispatch is hard-gated on `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED` and
+  **re-derives the package path from the filesystem scan**, never trusting a
+  persisted record's `metadata.package_path`. Without this, a forged
+  `register_agent(transport="local", metadata={"package_path": "/"})` card could
+  run `claude --dangerously-skip-permissions` in an arbitrary host directory.
+  Package paths are containment-checked against the resolved AgentiHub root and
+  agent ids are rejected if not a single traversal-free path component.
+
+### Fixed
+
+- `list_agents` no longer silently drops local agents when the registered slice
+  already fills `limit` (previously truncate-then-merge starved them, including
+  in the `dispatch_to_agent` routing path).
+- Package-path encoding is forward-computed and exact-matched, so agent names
+  containing dashes (`video-editor-agent`) resolve correctly — the existing
+  `decode_project_path` is dash-lossy and must not be inverted.
+- Hub resolution is `.resolve()`-d (symlinked `AGENTIHUB_DIR` no longer yields a
+  permanent false `idle`) and memoized per process.
+
+### Companion change (agentihub)
+
+- All 8 agent packages declare A2A domain capabilities in
+  `agents/*/package/command.yml`, grounded in each package's own CLAUDE.md.
+
 ## [0.2.1] - 2026-02-23
 
 ### Added

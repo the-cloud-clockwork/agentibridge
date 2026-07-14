@@ -186,7 +186,7 @@ python tests/integration/test_docker.py
 ```
 agentibridge/
 ├── agentibridge/           # Main package
-│   ├── server.py          # FastMCP server with 16 tools
+│   ├── server.py          # FastMCP server with 33 tools
 │   ├── parser.py          # JSONL transcript parser
 │   ├── store.py           # SessionStore (Redis + file fallback)
 │   ├── collector.py       # Background polling daemon

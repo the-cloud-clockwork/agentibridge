@@ -166,6 +166,10 @@ See [CLI Reference](docs/reference/cli-commands.md) for all commands and flags.
 | `dispatch_task` | "Continue that refactor task in the background" |
 | `get_dispatch_job` | "What's the status of job xyz?" |
 | `list_dispatch_jobs` | "What jobs have I dispatched recently?" |
+| `plan_task` | "Draft a plan for the refactor before touching any code" |
+| `get_dispatch_plan` | "Show me the plan for job xyz" |
+| `list_dispatch_plans` | "What plans have I dispatched recently?" |
+| `execute_plan` | "That plan looks good — execute it" |
 | `list_memory_files` | "What memory files exist across my projects?" |
 | `get_memory_file` | "Show me the MEMORY.md for the antoncore project" |
 | `list_plans` | "What plans have I created recently?" |
@@ -175,8 +179,20 @@ See [CLI Reference](docs/reference/cli-commands.md) for all commands and flags.
 | `handoff` | "Hand off this context to the agenticore project" |
 | `register_agent` / `heartbeat_agent` / `deregister_agent` | A2A lifecycle — agents announce themselves, ping liveness, and leave |
 | `list_agents` / `get_agent` / `find_agents` | Discover peers by type, status, or capability |
+| `discover_local_agents` | "What local agent packages are available on this host?" |
+| `run_agent` | "Send this task straight to the finops agent" |
+| `dispatch_to_agent` | "Route this to whichever agent handles video editing" |
 
-> **Note:** `search_semantic` and `generate_summary` require `AGENTIBRIDGE_EMBEDDING_ENABLED=true` + LLM config. Sessions are embedded automatically by the collector — see [Semantic Search](docs/architecture/semantic-search.md). Use `agentibridge embeddings` to check pipeline status. `dispatch_task` and `agent_search` call the `claude` CLI directly on the host. `handoff` seeds a conversation in a target project with structured context — use `list_handoff_projects` to discover available targets. A2A tools work with Redis or filesystem fallback — see [Agent Registry](docs/architecture/internals.md).
+> **Note:** `search_semantic` and `generate_summary` require `AGENTIBRIDGE_EMBEDDING_ENABLED=true` + LLM config. Sessions are embedded automatically by the collector — see [Semantic Search](docs/architecture/semantic-search.md). Use `agentibridge embeddings` to check pipeline status. `dispatch_task` and `agent_search` call the `claude` CLI directly on the host — `run_agent` and `dispatch_to_agent` do too, whenever they route to a local agent. `handoff` seeds a conversation in a target project with structured context — use `list_handoff_projects` to discover available targets. A2A tools work with Redis or filesystem fallback — see [Agent Registry](docs/architecture/internals.md).
+
+### Local Agents — session-gated AgentiHub packages
+
+Alongside registered A2A peers, AgentiBridge also discovers **local agents**: AgentiHub agent packages living on disk at `<AGENTIHUB_DIR>/agents/<name>/package/` (identified by a `CLAUDE.md`). They're computed at read time from a filesystem scan — never persisted to Redis or the agent store — and `list_agents` / `get_agent` / `find_agents` merge them in transparently once enabled.
+
+- **Never "offline", always callable** — liveness is session-gated: an agent is `"online"` only while a live `claude` session's working directory maps to its package dir (within the session TTL); otherwise it's `"idle"`. Idle just means no session is running right now — dispatch still works, it cold-starts a fresh `claude` in the package directory.
+- **Capability routing from `command.yml`** — each package's `command.yml` (`name`, `description`, `capabilities`) supplies the domain tags (e.g. `cost-analysis`, `video-editing`, `content-drafting`) that `find_agents` / `dispatch_to_agent` route on.
+- **Discovery**: `discover_local_agents(status="")` lists them directly, including the resolved AgentiHub path and whether the feature is enabled.
+- **Dispatch**: `run_agent` (by id) and `dispatch_to_agent` (by capability) both spawn a fresh `claude` CLI process in the package directory when they route to a local agent.
 
 ---
 
