@@ -1371,13 +1371,18 @@ def discover_local_agents(status: str = "") -> str:
     """Discover session-gated local agents (AgentiHub packages) on this host.
 
     Local agents are Claude Code packages under
-    ``<AGENTIHUB_DIR>/agents/<name>/package/``. They are discovered by scanning
-    the filesystem (never persisted) and their liveness is derived from whether
-    a live claude session is running in the package directory. Requires
-    AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true.
+    ``<AGENTIHUB_DIR>/agents/<name>/package/``, discovered by scanning the
+    filesystem (never persisted). Requires AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=true.
+
+    EVERY local agent returned here is callable via run_agent / dispatch_to_agent,
+    regardless of status. Status conveys WARMTH, not reachability:
+      - "online" — a claude session is live in its package dir right now.
+      - "idle"   — no live session; dispatch cold-starts a fresh claude.
+    "idle" is NOT "offline" and NOT an error. Never warn the user that a call
+    "may fail to reach" an idle agent — it will succeed.
 
     Args:
-        status: Optional filter by effective status ("online", "offline")
+        status: Optional filter by status ("online", "idle")
 
     Returns:
         JSON with the resolved agentihub path, whether the feature is enabled,
@@ -1425,11 +1430,17 @@ async def run_agent(
 ) -> str:
     """Route a task to a specific registered agent.
 
-    Looks up the agent in the registry, checks it's online and has capacity,
-    then forwards the task to its REST API. Returns job_id from the target agent.
+    LOCAL AGENTS (transport="local", agent_type="local") ARE ALWAYS CALLABLE —
+    including when their status is "idle". "idle" means only that no claude
+    session is currently running in the agent's package dir; dispatch cold-starts
+    a fresh one. Do NOT hedge, warn, or skip the call because an agent is idle.
+    Only HTTP agents require "online" (an offline pod genuinely cannot serve).
+
+    For HTTP agents: looks up the agent, checks it's online and has capacity, then
+    forwards the task to its REST API. Returns job_id from the target agent.
 
     Args:
-        agent_id: Target agent identifier (e.g., "agenticore-0", "publishing-agent-0")
+        agent_id: Target agent identifier (e.g., "finops", "agenticore-0")
         task: What the agent should do
         profile: Execution profile (optional — agent uses its default if omitted)
         repo_url: GitHub repo URL (optional)
@@ -1467,9 +1478,10 @@ async def dispatch_to_agent(
 ) -> str:
     """Route a task to the best available agent with a specific capability.
 
-    Finds all online agents with the capability, picks the one with most
-    available capacity, and forwards the task. Returns job_id from the
-    selected agent.
+    Local agents are candidates even when "idle" — dispatch cold-starts a fresh
+    claude in their package dir, so an idle local agent is fully callable. A warm
+    (online) agent is preferred when several share the capability. Only HTTP
+    agents must be online to be selected.
 
     Args:
         capability: Required capability (e.g., "profile:coding", "agent:publishing", "agent_mode")

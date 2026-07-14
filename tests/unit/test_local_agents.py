@@ -170,11 +170,36 @@ class TestDiscoverLocalAgents:
             assert r["metadata"]["package_path"].endswith("/package")
             assert f"agent:{r['agent_id']}" in r["capabilities"]
 
-    def test_offline_when_no_session(self, tmp_path, enable_local):
+    def test_idle_when_no_session(self, tmp_path, enable_local):
         hub = _make_hub(tmp_path, ["alpha"])
         recs = la.discover_local_agents(str(hub), store=FakeStore([]), ttl=3600)
-        assert recs[0]["effective_status"] == "offline"
-        assert recs[0]["metadata"]["available_capacity"] == 0
+        assert recs[0]["effective_status"] == "idle"
+        assert recs[0]["metadata"]["available_capacity"] == 1
+
+    def test_idle_record_never_reads_as_unreachable(self, tmp_path, enable_local):
+        # Regression: emitting "offline" + available_capacity 0 made LLM callers
+        # hedge ("this may fail to reach it") on dispatches that in fact succeed.
+        # An idle local agent must advertise itself as callable, in every field a
+        # consumer might read.
+        hub = _make_hub(tmp_path, ["alpha"])
+        rec = la.discover_local_agents(str(hub), store=FakeStore([]), ttl=3600)[0]
+        assert rec["effective_status"] == "idle"
+        assert rec["status"] != "offline"
+        assert rec["dispatchable"] is True
+        assert rec["metadata"]["available_capacity"] == 1
+        assert rec["metadata"]["session_live"] is False
+        assert rec["metadata"]["cold_start_on_dispatch"] is True
+        assert "cold-start" in rec["metadata"]["dispatch_hint"].lower()
+
+    def test_online_record_marks_session_live(self, tmp_path, enable_local):
+        hub = _make_hub(tmp_path, ["alpha"])
+        encoded = _pkg_encoded(hub, "alpha")
+        store = FakeStore([_session(encoded, _iso(datetime.now(timezone.utc)))])
+        rec = la.discover_local_agents(str(hub), store=store, ttl=3600)[0]
+        assert rec["effective_status"] == "online"
+        assert rec["dispatchable"] is True
+        assert rec["metadata"]["session_live"] is True
+        assert rec["metadata"]["cold_start_on_dispatch"] is False
 
     def test_online_when_recent_session(self, tmp_path, enable_local):
         hub = _make_hub(tmp_path, ["coding-agent"])
@@ -185,13 +210,13 @@ class TestDiscoverLocalAgents:
         assert recs[0]["metadata"]["available_capacity"] == 1
         assert recs[0]["metadata"]["session_id"] == "sess-1"
 
-    def test_offline_when_session_stale(self, tmp_path, enable_local):
+    def test_idle_when_session_stale(self, tmp_path, enable_local):
         hub = _make_hub(tmp_path, ["alpha"])
         encoded = _pkg_encoded(hub, "alpha")
         old = datetime.now(timezone.utc) - timedelta(seconds=7200)
         store = FakeStore([_session(encoded, _iso(old))])
         recs = la.discover_local_agents(str(hub), store=store, ttl=3600)
-        assert recs[0]["effective_status"] == "offline"
+        assert recs[0]["effective_status"] == "idle"
 
     def test_dashed_name_requires_exact_match(self, tmp_path, enable_local):
         # A session under any non-exact project_encoded must NOT count as live —
@@ -200,14 +225,14 @@ class TestDiscoverLocalAgents:
         decoy = _pkg_encoded(hub, "coding-agent").replace("coding-agent", "coding/agent")
         store = FakeStore([_session(decoy, _iso(datetime.now(timezone.utc)))])
         recs = la.discover_local_agents(str(hub), store=store, ttl=3600)
-        assert recs[0]["effective_status"] == "offline"
+        assert recs[0]["effective_status"] == "idle"
 
-    def test_empty_last_update_is_offline(self, tmp_path, enable_local):
+    def test_empty_last_update_is_idle(self, tmp_path, enable_local):
         hub = _make_hub(tmp_path, ["alpha"])
         encoded = _pkg_encoded(hub, "alpha")
         store = FakeStore([_session(encoded, "")])
         recs = la.discover_local_agents(str(hub), store=store, ttl=3600)
-        assert recs[0]["effective_status"] == "offline"
+        assert recs[0]["effective_status"] == "idle"
 
 
 @pytest.mark.unit
@@ -241,7 +266,7 @@ class TestGetAndFilter:
                 "agent_id": "b",
                 "agent_type": "local",
                 "capabilities": ["local", "agent:b"],
-                "effective_status": "offline",
+                "effective_status": "idle",
             },
         ]
         assert len(filter_records(recs, status="online")) == 1

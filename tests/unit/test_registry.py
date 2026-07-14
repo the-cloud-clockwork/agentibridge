@@ -128,14 +128,14 @@ class TestGetAgentLocalFallback:
 
 @pytest.mark.unit
 class TestRouteByCapability:
-    def test_offline_local_agent_is_still_dispatchable(
+    def test_idle_local_agent_is_still_dispatchable(
         self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch
     ):
         # A local agent with no live session must still receive capability-routed
         # work — dispatch cold-starts it, same as direct run_agent.
         pkg = tmp_path / "pkg"
         pkg.mkdir()
-        rec = _local_rec("video-editor-agent", str(pkg), status="offline")
+        rec = _local_rec("video-editor-agent", str(pkg), status="idle")
         rec["capabilities"] = ["local", "agent:video-editor-agent", "video-editing"]
         monkeypatch.setattr("agentibridge.local_agents.discover_local_agents", lambda *a, **k: [rec])
         monkeypatch.setattr("agentibridge.local_agents.filter_records", lambda recs, *a, **k: recs)
@@ -159,12 +159,12 @@ class TestRouteByCapability:
         assert result["success"] is False
         assert "no available agents" in result["error"]
 
-    def test_online_preferred_over_offline(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
+    def test_online_preferred_over_idle(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
         warm = tmp_path / "warm"
         warm.mkdir()
         cold = tmp_path / "cold"
         cold.mkdir()
-        a_off = _local_rec("cold-agent", str(cold), status="offline")
+        a_off = _local_rec("cold-agent", str(cold), status="idle")
         a_off["capabilities"] = ["local", "agent:cold-agent", "media"]
         a_on = _local_rec("warm-agent", str(warm), status="online")
         a_on["capabilities"] = ["local", "agent:warm-agent", "media"]
@@ -210,13 +210,13 @@ class TestRouteToLocalAgent:
         assert calls["project"] == str(pkg)
         assert calls["task"] == "do the thing"
 
-    def test_cold_start_when_offline(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
+    def test_cold_start_when_idle(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
         # Direct dispatch must cold-start even when no live session (offline).
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         monkeypatch.setattr(
             "agentibridge.local_agents.get_local_agent",
-            lambda agent_id, *a, **k: _local_rec("loc", str(pkg), status="offline"),
+            lambda agent_id, *a, **k: _local_rec("loc", str(pkg), status="idle"),
         )
 
         async def fake_dispatch(**k):

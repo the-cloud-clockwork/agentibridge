@@ -10,10 +10,11 @@ send heartbeats), local agents are:
 
 - **Discovered**, never persisted — the catalog is a filesystem scan performed
   at read time. Nothing is written to Redis / the agent file store.
-- **Session-gated** — a package's liveness is *derived* from whether a live
+- **Session-gated** — a package's *warmth* is derived from whether a live
   ``claude`` session's working directory maps to the package path within a
-  freshness TTL. No session running there → the agent is ``offline`` (still
-  discoverable, just not "online").
+  freshness TTL. No session running there → ``idle``, NOT ``offline``. A local
+  agent is never unreachable: dispatch cold-starts a fresh claude in it. Status
+  conveys warmth, never reachability, and must never read as "do not call".
 
 Each package is shaped as an ``AgentRecord``-compatible dict (``transport =
 "local"``, empty ``endpoint``, ``package_path`` in ``metadata``) so it flows
@@ -164,8 +165,14 @@ def _session_liveness(package_path: str, store, ttl: int) -> Tuple[str, str, str
 
     ``status`` is ``"online"`` iff a claude session whose ``project_encoded``
     exactly matches ``encode_project_path(package_path)`` had activity within
-    ``ttl`` seconds, else ``"offline"``. Exact-match (not the store's lossy
+    ``ttl`` seconds, else ``"idle"``. Exact-match (not the store's lossy
     substring/decode) avoids false positives on dashed agent names.
+
+    NOTE the vocabulary: a local agent is never ``"offline"``. In an agent
+    registry "offline" means *unreachable*, and a local package is always
+    reachable — dispatch cold-starts a fresh claude in it. ``"idle"`` means
+    only "no live session right now". Emitting "offline" here made LLM callers
+    hedge or refuse to dispatch, even though the call would have succeeded.
     """
     encoded = encode_project_path(package_path)
     try:
@@ -173,7 +180,7 @@ def _session_liveness(package_path: str, store, ttl: int) -> Tuple[str, str, str
         sessions = store.list_sessions(project=encoded, limit=50)
     except Exception as e:  # pragma: no cover - defensive
         log("local_agents: liveness query failed", {"package_path": package_path, "error": str(e)})
-        return ("offline", "", "")
+        return ("idle", "", "")
 
     now = datetime.now(timezone.utc)
     best: Optional[Tuple[datetime, object]] = None
@@ -187,11 +194,11 @@ def _session_liveness(package_path: str, store, ttl: int) -> Tuple[str, str, str
             best = (dt, s)
 
     if best is None:
-        return ("offline", "", "")
+        return ("idle", "", "")
 
     dt, meta = best
     age = (now - dt).total_seconds()
-    status = "online" if age <= ttl else "offline"
+    status = "online" if age <= ttl else "idle"
     return (status, getattr(meta, "last_update", ""), getattr(meta, "session_id", ""))
 
 
@@ -255,6 +262,12 @@ def _build_record(
         if c not in caps:
             caps.append(c)
 
+    # A local agent is ALWAYS callable — dispatch cold-starts a fresh claude in
+    # its package dir. So it always advertises capacity and dispatchable=True.
+    # `status` conveys warmth only: "online" = a live session is running,
+    # "idle" = none right now (a cold start will be spawned on dispatch).
+    # Reporting capacity 0 / "offline" for an idle agent previously caused LLM
+    # callers to hedge ("this may fail to reach it") on calls that in fact work.
     return {
         "agent_id": name,
         "agent_name": manifest.get("display_name") or name,
@@ -263,11 +276,20 @@ def _build_record(
         "endpoint": "",
         "transport": LOCAL_TRANSPORT,
         "status": status,
+        "dispatchable": True,
         "metadata": {
             "source": "agentihub",
             "package_path": package_path,
             "description": manifest.get("description", ""),
-            "available_capacity": 1 if online else 0,
+            "available_capacity": 1,
+            "session_live": online,
+            "cold_start_on_dispatch": not online,
+            "dispatch_hint": (
+                "Live session running — dispatch reaches it immediately."
+                if online
+                else "No live session. Dispatch is still fully supported: it cold-starts a "
+                "fresh claude in the package dir. Do NOT treat 'idle' as unreachable."
+            ),
             "session_id": session_id,
             "last_activity": last_activity,
         },
