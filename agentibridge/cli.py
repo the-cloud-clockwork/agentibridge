@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -38,6 +39,12 @@ DATA_DIR = Path(__file__).parent / "data"
 _ENV_FILE = "agentibridge.env"
 _DOCKER_PS_FORMAT = "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 _CLOUDFLARED_DIR = ".cloudflared"
+
+# launchd (Darwin) daemon lifecycle — mirrors the systemd units 1:1
+_LAUNCHD_LABEL = "com.agentibridge"
+_LAUNCHD_DB_LABEL = "com.agentibridge.db"
+_LAUNCHD_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
+_LAUNCHD_LOG_DIR = Path.home() / "Library" / "Logs" / "agentibridge"
 _CLOUDFLARED_CONFIG = "config.yml"
 _NOT_SET = "(not set)"
 _MCP_JSON_HINT = "Add to ~/.mcp.json:"
@@ -119,7 +126,9 @@ def _container_health(name: str) -> str | None:
 
 
 def _systemd_active(service: str) -> str | None:
-    """Return systemd unit active state, or None if unavailable."""
+    """Return systemd unit active state, or None if unavailable (non-Linux)."""
+    if platform.system() != "Linux":
+        return None
     try:
         result = subprocess.run(
             ["systemctl", "is-active", service],
@@ -128,6 +137,28 @@ def _systemd_active(service: str) -> str | None:
             timeout=5,
         )
         return result.stdout.strip()
+    except Exception:
+        return None
+
+
+def _launchd_state(label: str) -> str | None:
+    """Return launchd agent state ('running', 'not loaded', ...), or None if unavailable."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return "not loaded"
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("state = "):
+                return line.removeprefix("state = ")
+        return "loaded"
     except Exception:
         return None
 
@@ -145,17 +176,24 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     # --- Service ---
     print("\n[Service]")
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-active", "agentibridge"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        status = result.stdout.strip()
-        print(f"  systemd: {status}")
-    except Exception:
-        print("  systemd: not checked (systemctl unavailable)")
+    if platform.system() == "Darwin":
+        try:
+            status = _launchd_state(_LAUNCHD_LABEL)
+            print(f"  launchd: {status if status is not None else 'not checked (launchctl unavailable)'}")
+        except Exception:
+            print("  launchd: not checked (launchctl unavailable)")
+    else:
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", "agentibridge"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            status = result.stdout.strip()
+            print(f"  systemd: {status}")
+        except Exception:
+            print("  systemd: not checked (systemctl unavailable)")
 
     # Check Docker
     try:
@@ -876,52 +914,121 @@ def cmd_serve(args: argparse.Namespace) -> None:
     server_main()
 
 
-def cmd_install(args: argparse.Namespace) -> None:
+def _launchd_plist_path() -> Path:
+    return _LAUNCHD_AGENTS_DIR / f"{_LAUNCHD_LABEL}.plist"
+
+
+def _build_launchd_plist(env_file: Path, python_bin: str) -> dict:
+    """Build the launchd agent dict for agentibridge, mirroring the systemd unit 1:1.
+
+    Type=simple -> RunAtLoad + KeepAlive; EnvironmentFile -> EnvironmentVariables;
+    ExecStart -> ProgramArguments.
+    """
+    env_vars = {"AGENTIBRIDGE_TRANSPORT": "sse"}
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith(";") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip().removeprefix("export ").strip()
+            env_vars[key] = value.strip().strip('"').strip("'")
+
+    _LAUNCHD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = str(_LAUNCHD_LOG_DIR / "agentibridge.log")
+
+    return {
+        "Label": _LAUNCHD_LABEL,
+        "ProgramArguments": [python_bin, "-m", "agentibridge"],
+        "WorkingDirectory": str(Path.home()),
+        "EnvironmentVariables": env_vars,
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": log_file,
+        "StandardErrorPath": log_file,
+    }
+
+
+def _launchd_bootstrap(plist_path: Path) -> bool:
+    """Load a launchd agent. Falls back to `launchctl load -w` on older macOS."""
+    uid = os.getuid()
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    fallback = subprocess.run(
+        ["launchctl", "load", "-w", str(plist_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return fallback.returncode == 0
+
+
+def _launchd_bootout(label: str) -> None:
+    """Unload a launchd agent if loaded. Best-effort, mirrors systemctl stop+disable."""
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True, check=False)
+
+
+def _install_launchd_agent(env_file: Path, python_bin: str) -> None:
+    plist_path = _launchd_plist_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    with plist_path.open("wb") as f:
+        plistlib.dump(_build_launchd_plist(env_file, python_bin), f)
+    print(f"  Installed {plist_path} (python: {python_bin})")
+
+    if _launchd_bootstrap(plist_path):
+        print(f"  {_LAUNCHD_LABEL}: loaded and started")
+    else:
+        print(f"  {_LAUNCHD_LABEL}: load failed — check launchctl print gui/{os.getuid()}/{_LAUNCHD_LABEL}")
+
+
+def _launchd_db_plist_path() -> Path:
+    return _LAUNCHD_AGENTS_DIR / f"{_LAUNCHD_DB_LABEL}.plist"
+
+
+def _build_launchd_db_plist(compose_file: Path) -> dict:
+    """Build the launchd agent dict for the DB compose stack, mirroring
+    agentibridge-db.service: RunAtLoad brings the containers back up on
+    login/reboot. No KeepAlive — the containers themselves carry
+    restart:unless-stopped, so there's nothing here to keep supervising
+    once the `up -d` invocation exits.
+    """
+    docker_bin = shutil.which("docker") or "docker"
+    _LAUNCHD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = str(_LAUNCHD_LOG_DIR / "agentibridge-db.log")
+
+    return {
+        "Label": _LAUNCHD_DB_LABEL,
+        "ProgramArguments": [docker_bin, "compose", "-f", str(compose_file), "up", "-d"],
+        "WorkingDirectory": str(compose_file.parent),
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "StandardOutPath": log_file,
+        "StandardErrorPath": log_file,
+    }
+
+
+def _install_launchd_db_agent(compose_file: Path) -> None:
+    plist_path = _launchd_db_plist_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    with plist_path.open("wb") as f:
+        plistlib.dump(_build_launchd_db_plist(compose_file), f)
+    print(f"  Installed {plist_path}")
+
+    if _launchd_bootstrap(plist_path):
+        print(f"  {_LAUNCHD_DB_LABEL}: loaded")
+    else:
+        print(f"  {_LAUNCHD_DB_LABEL}: load failed — check launchctl print gui/{os.getuid()}/{_LAUNCHD_DB_LABEL}")
+
+
+def _install_systemd_units(stack_dir: Path, env_file: Path, python_bin: str) -> None:
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
-
-    print("Installing agentibridge as systemd user service")
-
-    # Stop existing services
-    for unit in ("agentibridge", "agentibridge-bridge", "agentibridge-db"):
-        subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
-        subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
-    # Stop old agentibridge container if running from previous install
-    subprocess.run(["docker", "stop", "agentibridge"], capture_output=True, check=False)
-    subprocess.run(["docker", "rm", "agentibridge"], capture_output=True, check=False)
-    # Kill stale processes
-    subprocess.run(["pkill", "-f", "python.*-m agentibridge"], capture_output=True, check=False)
-
-    # Ensure stack dir and env
-    stack_dir = _ensure_stack_dir()
-    env_file = stack_dir / _ENV_FILE
-
-    # Always refresh compose file (removes old agentibridge container service)
-    compose_dest = stack_dir / "docker-compose.yml"
-    shutil.copy2(DATA_DIR / "docker-compose.yml", compose_dest)
-    print(f"  Updated {compose_dest}")
-
-    # Migrate old Docker-internal hostnames to localhost
-    if env_file.exists():
-        env_text = env_file.read_text()
-        new_text = env_text.replace("://redis:", "://localhost:").replace("@postgres:", "@localhost:")
-        # Remove obsolete bridge vars
-        for var in ("CLAUDE_DISPATCH_URL", "DISPATCH_SECRET", "DISPATCH_BRIDGE_PORT"):
-            new_text = re.sub(rf"^#?\s*{var}=.*\n?", "", new_text, flags=re.MULTILINE)
-        if new_text != env_text:
-            env_file.write_text(new_text)
-            print("  Migrated agentibridge.env: localhost + removed bridge vars")
-
-    # Ensure CLAUDE_BINARY is set to absolute path
-    if env_file.exists():
-        claude_bin = shutil.which("claude") or "claude"
-        env_text = env_file.read_text()
-        if "CLAUDE_BINARY=" not in env_text:
-            with open(env_file, "a") as f:
-                f.write(f"\nCLAUDE_BINARY={claude_bin}\n")
-            print(f"  Added CLAUDE_BINARY={claude_bin}")
-
-    # Generate systemd service with current Python path
-    python_bin = sys.executable
     systemd_dir.mkdir(parents=True, exist_ok=True)
 
     # Database service (docker compose for Redis + Postgres)
@@ -980,6 +1087,69 @@ def cmd_install(args: argparse.Namespace) -> None:
             print(f"  {unit}: enabled and started")
         else:
             print(f"  {unit}: enabled (start failed — check journalctl --user -u {unit})")
+
+
+def cmd_install(args: argparse.Namespace) -> None:
+    system = platform.system()
+    is_darwin = system == "Darwin"
+
+    print(f"Installing agentibridge as {'launchd agent' if is_darwin else 'systemd user service'}")
+
+    # Stop existing service definitions from a previous install
+    if is_darwin:
+        _launchd_bootout(_LAUNCHD_LABEL)
+    else:
+        for unit in ("agentibridge", "agentibridge-bridge", "agentibridge-db"):
+            subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
+            subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
+    # Stop old agentibridge container if running from previous install
+    subprocess.run(["docker", "stop", "agentibridge"], capture_output=True, check=False)
+    subprocess.run(["docker", "rm", "agentibridge"], capture_output=True, check=False)
+    # Kill stale processes
+    subprocess.run(["pkill", "-f", "python.*-m agentibridge"], capture_output=True, check=False)
+
+    # Ensure stack dir and env
+    stack_dir = _ensure_stack_dir()
+    env_file = stack_dir / _ENV_FILE
+
+    # Always refresh compose file (removes old agentibridge container service)
+    compose_dest = stack_dir / "docker-compose.yml"
+    shutil.copy2(DATA_DIR / "docker-compose.yml", compose_dest)
+    print(f"  Updated {compose_dest}")
+
+    # Migrate old Docker-internal hostnames to localhost
+    if env_file.exists():
+        env_text = env_file.read_text()
+        new_text = env_text.replace("://redis:", "://localhost:").replace("@postgres:", "@localhost:")
+        # Remove obsolete bridge vars
+        for var in ("CLAUDE_DISPATCH_URL", "DISPATCH_SECRET", "DISPATCH_BRIDGE_PORT"):
+            new_text = re.sub(rf"^#?\s*{var}=.*\n?", "", new_text, flags=re.MULTILINE)
+        if new_text != env_text:
+            env_file.write_text(new_text)
+            print("  Migrated agentibridge.env: localhost + removed bridge vars")
+
+    # Ensure CLAUDE_BINARY is set to absolute path
+    if env_file.exists():
+        claude_bin = shutil.which("claude") or "claude"
+        env_text = env_file.read_text()
+        if "CLAUDE_BINARY=" not in env_text:
+            with open(env_file, "a") as f:
+                f.write(f"\nCLAUDE_BINARY={claude_bin}\n")
+            print(f"  Added CLAUDE_BINARY={claude_bin}")
+
+    # Generate the service definition with current Python path
+    python_bin = sys.executable
+
+    if is_darwin:
+        # Bring the stack up now, then install a launchd agent that mirrors
+        # agentibridge-db.service so it also comes back on login/reboot —
+        # the containers' own restart:unless-stopped only covers crashes,
+        # not a machine restart with Docker Desktop not yet running.
+        subprocess.run(["docker", "compose", "up", "-d"], cwd=stack_dir, check=False)
+        _install_launchd_db_agent(compose_dest)
+        _install_launchd_agent(env_file, python_bin)
+    else:
+        _install_systemd_units(stack_dir, env_file, python_bin)
     print()
 
     try:
@@ -989,28 +1159,40 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     print()
     print("Check status with: agentibridge status")
-    print("View logs with: journalctl --user -u agentibridge -f")
+    if is_darwin:
+        print(f"View logs with: tail -f {_LAUNCHD_LOG_DIR / 'agentibridge.log'}")
+    else:
+        print("View logs with: journalctl --user -u agentibridge -f")
 
 
 def cmd_uninstall(args: argparse.Namespace) -> None:
-    print("Uninstalling agentibridge systemd services...")
+    is_darwin = platform.system() == "Darwin"
+    print(f"Uninstalling agentibridge {'launchd agent' if is_darwin else 'systemd services'}...")
 
-    systemd_dir = Path.home() / ".config" / "systemd" / "user"
-    for unit in ("agentibridge", "agentibridge-db", "agentibridge-bridge"):
+    if is_darwin:
+        _launchd_bootout(_LAUNCHD_LABEL)
+        _launchd_bootout(_LAUNCHD_DB_LABEL)
+        for plist_path in (_launchd_plist_path(), _launchd_db_plist_path()):
+            if plist_path.exists():
+                plist_path.unlink()
+                print(f"  Removed {plist_path}")
+    else:
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        for unit in ("agentibridge", "agentibridge-db", "agentibridge-bridge"):
+            try:
+                subprocess.run(["systemctl", "--user", "stop", unit], check=False)
+                subprocess.run(["systemctl", "--user", "disable", unit], check=False)
+            except Exception:
+                pass
+            svc = systemd_dir / f"{unit}.service"
+            if svc.exists():
+                svc.unlink()
+                print(f"  Removed {svc}")
+
         try:
-            subprocess.run(["systemctl", "--user", "stop", unit], check=False)
-            subprocess.run(["systemctl", "--user", "disable", unit], check=False)
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
         except Exception:
             pass
-        svc = systemd_dir / f"{unit}.service"
-        if svc.exists():
-            svc.unlink()
-            print(f"  Removed {svc}")
-
-    try:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    except Exception:
-        pass
 
     print("  Services uninstalled")
     print()
@@ -1841,22 +2023,43 @@ def _short_digest(digest: str) -> str:
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
-    for unit in ("agentibridge", "agentibridge-db"):
-        subprocess.run(["systemctl", "--user", "stop", unit], check=False)
+    if platform.system() == "Darwin":
+        # bootout unloads the KeepAlive job, mirroring systemctl stop
+        # (a bare SIGTERM would just get relaunched by launchd).
+        _launchd_bootout(_LAUNCHD_LABEL)
+        _launchd_bootout(_LAUNCHD_DB_LABEL)
+        subprocess.run(["docker", "compose", "down"], cwd=_STACK_DIR, check=False)
+    else:
+        for unit in ("agentibridge", "agentibridge-db"):
+            subprocess.run(["systemctl", "--user", "stop", unit], check=False)
     print("AgentiBridge stopped. Start with: agentibridge install")
 
 
 def cmd_restart(args: argparse.Namespace) -> None:
-    subprocess.run(["systemctl", "--user", "restart", "agentibridge-db"], check=False)
-    subprocess.run(["systemctl", "--user", "restart", "agentibridge"], check=False)
+    if platform.system() == "Darwin":
+        _launchd_bootout(_LAUNCHD_LABEL)
+        _launchd_bootout(_LAUNCHD_DB_LABEL)
+        subprocess.run(["docker", "compose", "restart"], cwd=_STACK_DIR, check=False)
+        for plist_path in (_launchd_plist_path(), _launchd_db_plist_path()):
+            if plist_path.exists():
+                _launchd_bootstrap(plist_path)
+    else:
+        subprocess.run(["systemctl", "--user", "restart", "agentibridge-db"], check=False)
+        subprocess.run(["systemctl", "--user", "restart", "agentibridge"], check=False)
     print("AgentiBridge restarted.")
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    cmd = ["journalctl", "--user", "-u", "agentibridge", "--no-pager"]
-    cmd += ["-n", str(args.tail)]
-    if args.follow:
-        cmd.append("-f")
+    if platform.system() == "Darwin":
+        cmd = ["tail", "-n", str(args.tail)]
+        if args.follow:
+            cmd.append("-f")
+        cmd.append(str(_LAUNCHD_LOG_DIR / "agentibridge.log"))
+    else:
+        cmd = ["journalctl", "--user", "-u", "agentibridge", "--no-pager"]
+        cmd += ["-n", str(args.tail)]
+        if args.follow:
+            cmd.append("-f")
     subprocess.run(cmd, check=False)
 
 

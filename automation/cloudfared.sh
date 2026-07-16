@@ -140,9 +140,10 @@ else
     # Try to read from tunnel list first
     TUNNEL_ID=$(_tunnel_id_by_name "$TUNNEL_NAME")
 
-    # Fallback: parse "Created tunnel <name> with id <uuid>" from create output
+    # Fallback: parse "Created tunnel <name> with id <uuid>" from create output.
+    # sed -E (portable, works with BSD grep/sed on macOS) instead of GNU-only grep -oP.
     if [[ -z "$TUNNEL_ID" ]]; then
-        TUNNEL_ID=$(echo "$CREATE_OUTPUT" | grep -oP 'with id \K[0-9a-f-]+' | head -1)
+        TUNNEL_ID=$(echo "$CREATE_OUTPUT" | sed -nE 's/.*with id ([0-9a-f-]+).*/\1/p' | head -1)
     fi
 
     if [[ -z "$TUNNEL_ID" ]]; then

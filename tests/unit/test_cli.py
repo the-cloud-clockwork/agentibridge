@@ -15,12 +15,23 @@ from agentibridge.cli import (
     cmd_connect,
     cmd_config,
     cmd_status,
+    cmd_install,
+    cmd_uninstall,
     cmd_stop,
+    cmd_restart,
+    cmd_logs,
     cmd_tunnel,
     cmd_update,
     cmd_embeddings,
     _container_health,
     _systemd_active,
+    _launchd_state,
+    _build_launchd_plist,
+    _build_launchd_db_plist,
+    _launchd_bootstrap,
+    _launchd_bootout,
+    _LAUNCHD_LABEL,
+    _LAUNCHD_DB_LABEL,
     _cloudflared_hostname,
     _parse_cloudflared_config,
     _extract_tunnel_url,
@@ -267,6 +278,169 @@ class TestSystemdActive:
     def test_returns_none_on_exception(self):
         with patch("agentibridge.cli.subprocess.run", side_effect=FileNotFoundError):
             assert _systemd_active("cloudflared") is None
+
+
+@pytest.mark.unit
+class TestLaunchdState:
+    """Tests for _launchd_state() — the Darwin analogue of _systemd_active()."""
+
+    def test_returns_running(self):
+        stdout = "gui/501/com.agentibridge = {\n\tstate = running\n}\n"
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok(stdout=stdout)),
+        ):
+            assert _launchd_state("com.agentibridge") == "running"
+
+    def test_returns_not_loaded_on_nonzero_exit(self):
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run", return_value=_fail()),
+        ):
+            assert _launchd_state("com.agentibridge") == "not loaded"
+
+    def test_returns_loaded_when_no_state_line(self):
+        stdout = "gui/501/com.agentibridge = {\n\tpath = /Library/LaunchAgents/com.agentibridge.plist\n}\n"
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok(stdout=stdout)),
+        ):
+            assert _launchd_state("com.agentibridge") == "loaded"
+
+    def test_returns_none_on_exception(self):
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run", side_effect=FileNotFoundError),
+        ):
+            assert _launchd_state("com.agentibridge") is None
+
+    def test_returns_none_on_non_darwin(self):
+        with patch("agentibridge.cli.platform.system", return_value="Linux"):
+            assert _launchd_state("com.agentibridge") is None
+
+
+@pytest.mark.unit
+class TestBuildLaunchdPlist:
+    """Tests for _build_launchd_plist() — systemd EnvironmentFile= parity."""
+
+    def test_no_env_file(self, tmp_path):
+        plist = _build_launchd_plist(tmp_path / "missing.env", "/usr/bin/python3")
+        assert plist["EnvironmentVariables"] == {"AGENTIBRIDGE_TRANSPORT": "sse"}
+        assert plist["Label"] == _LAUNCHD_LABEL
+        assert plist["ProgramArguments"] == ["/usr/bin/python3", "-m", "agentibridge"]
+
+    def test_strips_export_prefix(self, tmp_path):
+        env_file = tmp_path / "agentibridge.env"
+        env_file.write_text("export FOO=bar\n")
+        with patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path):
+            plist = _build_launchd_plist(env_file, "/usr/bin/python3")
+        assert plist["EnvironmentVariables"]["FOO"] == "bar"
+        assert "export FOO" not in plist["EnvironmentVariables"]
+
+    def test_skips_hash_and_semicolon_comments(self, tmp_path):
+        env_file = tmp_path / "agentibridge.env"
+        env_file.write_text("# hash comment\n; semicolon comment\nFOO=bar\n")
+        with patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path):
+            plist = _build_launchd_plist(env_file, "/usr/bin/python3")
+        assert plist["EnvironmentVariables"] == {"AGENTIBRIDGE_TRANSPORT": "sse", "FOO": "bar"}
+
+    def test_strips_quoted_values(self, tmp_path):
+        env_file = tmp_path / "agentibridge.env"
+        env_file.write_text('FOO="bar"\nBAZ=\'qux\'\n')
+        with patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path):
+            plist = _build_launchd_plist(env_file, "/usr/bin/python3")
+        assert plist["EnvironmentVariables"]["FOO"] == "bar"
+        assert plist["EnvironmentVariables"]["BAZ"] == "qux"
+
+    def test_export_and_comment_combined(self, tmp_path):
+        env_file = tmp_path / "agentibridge.env"
+        env_file.write_text("export KEY=VAL\n; ignored\n# also ignored\nexport OTHER=1\n")
+        with patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path):
+            plist = _build_launchd_plist(env_file, "/usr/bin/python3")
+        assert plist["EnvironmentVariables"]["KEY"] == "VAL"
+        assert plist["EnvironmentVariables"]["OTHER"] == "1"
+        assert len(plist["EnvironmentVariables"]) == 3  # + AGENTIBRIDGE_TRANSPORT default
+
+
+@pytest.mark.unit
+class TestBuildLaunchdDbPlist:
+    """Tests for _build_launchd_db_plist() — the DB-stack login/reboot agent."""
+
+    def test_program_arguments(self, tmp_path):
+        compose_file = tmp_path / "docker-compose.yml"
+        with (
+            patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path),
+            patch("shutil.which", return_value="/usr/local/bin/docker"),
+        ):
+            plist = _build_launchd_db_plist(compose_file)
+        assert plist["Label"] == _LAUNCHD_DB_LABEL
+        assert plist["ProgramArguments"] == [
+            "/usr/local/bin/docker",
+            "compose",
+            "-f",
+            str(compose_file),
+            "up",
+            "-d",
+        ]
+        assert plist["RunAtLoad"] is True
+        assert plist["KeepAlive"] is False
+
+    def test_falls_back_to_bare_docker_when_not_on_path(self, tmp_path):
+        compose_file = tmp_path / "docker-compose.yml"
+        with (
+            patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path),
+            patch("shutil.which", return_value=None),
+        ):
+            plist = _build_launchd_db_plist(compose_file)
+        assert plist["ProgramArguments"][0] == "docker"
+
+
+@pytest.mark.unit
+class TestLaunchdBootstrap:
+    def test_bootstrap_success(self):
+        with patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run:
+            assert _launchd_bootstrap(Path("/tmp/com.agentibridge.plist")) is True
+        assert mock_run.call_count == 1
+        assert mock_run.call_args[0][0][:2] == ["launchctl", "bootstrap"]
+
+    def test_falls_back_to_load_w_on_bootstrap_failure(self):
+        with patch(
+            "agentibridge.cli.subprocess.run",
+            side_effect=[_fail(), _ok()],
+        ) as mock_run:
+            assert _launchd_bootstrap(Path("/tmp/com.agentibridge.plist")) is True
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[1][0][0][:2] == ["launchctl", "load"]
+
+    def test_returns_false_when_both_fail(self):
+        with patch("agentibridge.cli.subprocess.run", side_effect=[_fail(), _fail()]):
+            assert _launchd_bootstrap(Path("/tmp/com.agentibridge.plist")) is False
+
+
+@pytest.mark.unit
+class TestLaunchdBootout:
+    def test_calls_launchctl_bootout(self):
+        with (
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
+            _launchd_bootout("com.agentibridge")
+        mock_run.assert_called_once_with(
+            ["launchctl", "bootout", "gui/501/com.agentibridge"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_does_not_raise_when_not_loaded(self):
+        with (
+            patch("agentibridge.cli.os.getuid", return_value=501),
+            patch("agentibridge.cli.subprocess.run", return_value=_fail()),
+        ):
+            _launchd_bootout("com.agentibridge")  # best-effort, no exception
 
 
 def _mock_cloudflared_dir(tmp_path):
@@ -888,18 +1062,226 @@ class TestReadEnvValue:
 
 
 @pytest.mark.unit
+class TestCmdInstall:
+    """Tests for cmd_install() command."""
+
+    def test_darwin_installs_both_launchd_agents(self, tmp_path):
+        """Darwin install writes both the main and DB plists and loads both."""
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
+            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
+            patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", tmp_path / "LaunchAgents"),
+            patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path / "Logs"),
+            patch("agentibridge.cli.install_claude_assets"),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_install(MagicMock())
+
+        assert (tmp_path / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist").exists()
+        assert (tmp_path / "LaunchAgents" / f"{_LAUNCHD_DB_LABEL}.plist").exists()
+
+        bootstrap_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootstrap"]]
+        assert any(f"{_LAUNCHD_LABEL}.plist" in call[-1] for call in bootstrap_calls)
+        assert any(f"{_LAUNCHD_DB_LABEL}.plist" in call[-1] for call in bootstrap_calls)
+
+        compose_calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["docker", "compose", "up", "-d"] in compose_calls
+        # systemd path must not run on Darwin
+        assert not any(call[0] == "systemctl" for call in compose_calls)
+
+    def test_linux_installs_systemd_units_not_launchd(self, tmp_path):
+        """Linux install stays on the systemd path and never touches launchd."""
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
+            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
+            patch("agentibridge.cli.install_claude_assets"),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_install(MagicMock())
+
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert not any(call[0] == "launchctl" for call in calls)
+        assert ["systemctl", "--user", "daemon-reload"] in calls
+        assert (tmp_path / "LaunchAgents").exists() is False
+
+
+@pytest.mark.unit
+class TestCmdUninstall:
+    """Tests for cmd_uninstall() command."""
+
+    def test_darwin_removes_both_plists(self, tmp_path):
+        agents_dir = tmp_path / "LaunchAgents"
+        agents_dir.mkdir()
+        main_plist = agents_dir / f"{_LAUNCHD_LABEL}.plist"
+        db_plist = agents_dir / f"{_LAUNCHD_DB_LABEL}.plist"
+        main_plist.write_bytes(b"")
+        db_plist.write_bytes(b"")
+
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
+            patch("agentibridge.cli.uninstall_claude_assets"),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_uninstall(MagicMock())
+
+        assert not main_plist.exists()
+        assert not db_plist.exists()
+        bootout_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootout"]]
+        assert any(_LAUNCHD_LABEL in call[2] for call in bootout_calls)
+        assert any(_LAUNCHD_DB_LABEL in call[2] for call in bootout_calls)
+
+    def test_darwin_handles_missing_plists(self, tmp_path):
+        """No plist on disk — bootout still runs, unlink is skipped without error."""
+        agents_dir = tmp_path / "LaunchAgents"
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
+            patch("agentibridge.cli.uninstall_claude_assets"),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_uninstall(MagicMock())
+
+        bootout_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootout"]]
+        assert len(bootout_calls) == 2
+
+
 @pytest.mark.unit
 class TestCmdStop:
     """Tests for cmd_stop() command."""
 
     def test_stops_systemd_services(self):
         """Calls systemctl stop for both services."""
-        with patch("agentibridge.cli.subprocess.run") as mock_run:
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
             cmd_stop(MagicMock())
 
         calls = [c[0][0] for c in mock_run.call_args_list]
         assert ["systemctl", "--user", "stop", "agentibridge"] in calls
         assert ["systemctl", "--user", "stop", "agentibridge-db"] in calls
+
+    def test_stops_launchd_agents_on_darwin(self, tmp_path):
+        """Darwin branch boots out both the main and DB launchd labels."""
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
+            cmd_stop(MagicMock())
+
+        bootout_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootout"]]
+        assert any(_LAUNCHD_LABEL in call[2] for call in bootout_calls)
+        assert any(_LAUNCHD_DB_LABEL in call[2] for call in bootout_calls)
+        compose_calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["docker", "compose", "down"] in compose_calls
+
+
+@pytest.mark.unit
+class TestCmdRestart:
+    """Tests for cmd_restart() command."""
+
+    def test_restarts_systemd_services(self):
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_restart(MagicMock())
+
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["systemctl", "--user", "restart", "agentibridge-db"] in calls
+        assert ["systemctl", "--user", "restart", "agentibridge"] in calls
+
+    def test_darwin_boots_out_and_reloads_both_agents(self, tmp_path):
+        """Darwin branch boots out both labels, then reloads whichever plists exist."""
+        agents_dir = tmp_path / "LaunchAgents"
+        agents_dir.mkdir()
+        (agents_dir / f"{_LAUNCHD_LABEL}.plist").write_bytes(b"")
+        (agents_dir / f"{_LAUNCHD_DB_LABEL}.plist").write_bytes(b"")
+
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path),
+            patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_restart(MagicMock())
+
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        bootout_calls = [c for c in calls if c[:2] == ["launchctl", "bootout"]]
+        assert any(_LAUNCHD_LABEL in c[2] for c in bootout_calls)
+        assert any(_LAUNCHD_DB_LABEL in c[2] for c in bootout_calls)
+
+        bootstrap_calls = [c for c in calls if c[:2] == ["launchctl", "bootstrap"]]
+        assert any(f"{_LAUNCHD_LABEL}.plist" in c[-1] for c in bootstrap_calls)
+        assert any(f"{_LAUNCHD_DB_LABEL}.plist" in c[-1] for c in bootstrap_calls)
+
+        assert ["docker", "compose", "restart"] in calls
+
+    def test_darwin_skips_reload_for_missing_plist(self, tmp_path):
+        """No plists on disk — bootstrap is never attempted."""
+        agents_dir = tmp_path / "LaunchAgents"
+        agents_dir.mkdir()
+
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path),
+            patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+        ):
+            cmd_restart(MagicMock())
+
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert not any(c[:2] == ["launchctl", "bootstrap"] for c in calls)
+
+
+@pytest.mark.unit
+class TestCmdLogs:
+    """Tests for cmd_logs() command."""
+
+    def test_darwin_tails_launchd_log_file(self, tmp_path):
+        args = MagicMock(tail=50, follow=False)
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
+            cmd_logs(args)
+
+        mock_run.assert_called_once_with(
+            ["tail", "-n", "50", str(tmp_path / "agentibridge.log")],
+            check=False,
+        )
+
+    def test_darwin_follow_appends_flag(self, tmp_path):
+        args = MagicMock(tail=100, follow=True)
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Darwin"),
+            patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
+            cmd_logs(args)
+
+        mock_run.assert_called_once_with(
+            ["tail", "-n", "100", "-f", str(tmp_path / "agentibridge.log")],
+            check=False,
+        )
+
+    def test_linux_uses_journalctl(self):
+        args = MagicMock(tail=25, follow=True)
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli.subprocess.run") as mock_run,
+        ):
+            cmd_logs(args)
+
+        mock_run.assert_called_once_with(
+            ["journalctl", "--user", "-u", "agentibridge", "--no-pager", "-n", "25", "-f"],
+            check=False,
+        )
 
 
 @pytest.mark.unit
