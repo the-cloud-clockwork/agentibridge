@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Reference template — `agentibridge install` generates this file for real
+  (with the actual python interpreter and env vars filled in) via
+  agentibridge/cli.py::_build_launchd_plist(). This copy documents the shape
+  for manual install/inspection; replace YOUR_USER with your macOS username
+  before using it directly.
+
+  Mirrors deploy/agentibridge.service 1:1:
+    Type=simple          -> RunAtLoad + KeepAlive
+    EnvironmentFile       -> EnvironmentVariables
+    ExecStart             -> ProgramArguments
+
+  Install:   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentibridge.plist
+  Uninstall: launchctl bootout gui/$(id -u)/com.agentibridge
+  Status:    launchctl print gui/$(id -u)/com.agentibridge
+  Logs:      tail -f ~/Library/Logs/agentibridge/agentibridge.log
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.agentibridge</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/YOUR_USER/.venv/bin/python3</string>
+		<string>-m</string>
+		<string>agentibridge</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/YOUR_USER</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AGENTIBRIDGE_TRANSPORT</key>
+		<string>sse</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Users/YOUR_USER/Library/Logs/agentibridge/agentibridge.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOUR_USER/Library/Logs/agentibridge/agentibridge.log</string>
+</dict>
+</plist>

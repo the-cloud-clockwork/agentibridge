@@ -60,6 +60,10 @@ def encode_project_path(path: str) -> str:
     (``coding-agent``, ``tcc-ecosystem``). Encoding forward is lossless, and we
     only ever need the forward direction to look a package up by its exact
     ``project_encoded`` name.
+
+    Assumes a case-sensitive filesystem: on case-insensitive APFS (macOS
+    default), two package paths differing only by case encode to dirs that
+    the OS treats as the same file, which this lookup can't distinguish.
     """
     return str(path).rstrip("/").replace("/", "-")
 

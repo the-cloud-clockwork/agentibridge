@@ -81,7 +81,9 @@ def decode_project_path(encoded: str) -> str:
 
     '-home-iamroot-dev-agenticore' -> '/home/iamroot/dev/agenticore'
 
-    Note: lossy for double-dash worktree dirs (best-effort).
+    Note: lossy for double-dash worktree dirs (best-effort). Also assumes a
+    case-sensitive filesystem for the `/`<->`-` round trip; on case-insensitive
+    APFS (macOS default), two project dirs differing only by case collide.
     """
     if not encoded:
         return encoded
