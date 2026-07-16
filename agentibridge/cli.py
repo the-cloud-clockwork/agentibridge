@@ -1097,7 +1097,11 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     # Stop existing service definitions from a previous install
     if is_darwin:
+        # Boot out BOTH labels — a stale com.agentibridge.db job keeps its old
+        # ProgramArguments until booted out; bootstrap at the same path is a
+        # no-op for an already-loaded job (launchd won't re-read the plist).
         _launchd_bootout(_LAUNCHD_LABEL)
+        _launchd_bootout(_LAUNCHD_DB_LABEL)
     else:
         for unit in ("agentibridge", "agentibridge-bridge", "agentibridge-db"):
             subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)

@@ -1090,6 +1090,14 @@ class TestCmdInstall:
         # systemd path must not run on Darwin
         assert not any(call[0] == "systemctl" for call in compose_calls)
 
+        # Reinstall pre-cleanup must boot out BOTH labels — a stale
+        # com.agentibridge.db job would otherwise keep its old
+        # ProgramArguments (bootstrap at the same path is a no-op for an
+        # already-loaded job).
+        bootout_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootout"]]
+        assert any(call[-1].endswith(f"/{_LAUNCHD_LABEL}") for call in bootout_calls)
+        assert any(call[-1].endswith(f"/{_LAUNCHD_DB_LABEL}") for call in bootout_calls)
+
     def test_linux_installs_systemd_units_not_launchd(self, tmp_path):
         """Linux install stays on the systemd path and never touches launchd."""
         with (
