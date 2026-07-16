@@ -1,6 +1,6 @@
 [project]
 name = "agentibridge"
-version = "0.7.0"
+version = "0.7.1"
 description = "Claude CLI transcript indexer and MCP server"
 readme = "README.md"
 license = {text = "MIT"}
