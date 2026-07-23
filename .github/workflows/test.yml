@@ -38,7 +38,10 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: pip install ruff>=0.4
+        # Bounded: an unpinned `ruff>=0.4` silently pulled 0.16.0, whose wider
+        # default rule set broke lint with no code change. Patch updates flow;
+        # minor bumps land deliberately.
+        run: pip install "ruff~=0.16.0"
 
       - name: Lint check
         run: ruff check agentibridge/ tests/
