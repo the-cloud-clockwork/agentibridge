@@ -3,7 +3,7 @@ name: session-handoff
 description: >
   Cross-project session handoff via MCP dispatch (primary) or memory file (fallback).
   Creates a resumable Claude session in the target project seeded with context from
-  the current conversation. If the agentibridge-local MCP is unavailable, falls back to
+  the current conversation. If the agentibridge-mcp MCP is unavailable, falls back to
   writing a dated memory file into the target project's auto-memory directory.
   Use when the user says "hand off to <repo>", "save handoff for <repo>",
   "make <repo> aware of what we did", or "so next session knows where we left off".
@@ -14,11 +14,11 @@ argument-hint: "<target-repo-path> [headline hint]"
 
 Hand off context from the current session to another project. Two paths:
 
-1. **MCP path (primary):** Call `agentibridge-local` `handoff` tool → spawns a Claude
+1. **MCP path (primary):** Call `agentibridge-mcp` `handoff` tool → spawns a Claude
    session in the target project seeded with the handoff content. Returns a
    `session_id` + `resume_command` the operator can use anytime.
 2. **Memory-file path (fallback):** Write a dated memory file into the target
-   project's auto-memory directory + index in MEMORY.md. Used when `agentibridge-local`
+   project's auto-memory directory + index in MEMORY.md. Used when `agentibridge-mcp`
    MCP is not available in the current session.
 
 **When NOT to use**: this is for cross-project context handoff. If you
@@ -99,12 +99,12 @@ this structure — every section is required unless noted:
 
 ## Step 4 — Dispatch: MCP primary path
 
-This skill is paired with the **`agentibridge-local`** MCP server (registered in
+This skill is paired with the **`agentibridge-mcp`** MCP server (registered in
 `~/.claude.json` by `agentibridge install`). The primary path calls its
-`handoff` tool — exposed to Claude Code as **`mcp__agentibridge-local__handoff`**.
+`handoff` tool — exposed to Claude Code as **`mcp__agentibridge-mcp__handoff`**.
 
 Before attempting the call, confirm the tool is loaded in the current session.
-If `mcp__agentibridge-local__*` tools are not visible, skip directly to
+If `mcp__agentibridge-mcp__*` tools are not visible, skip directly to
 Step 4-fallback — do NOT try alternative server names (e.g. `agentibridge`,
 `agentibridge-development`, `home-bridge`); those are different deployments.
 
@@ -126,7 +126,7 @@ The operator will resume this session when ready.
 
 ### 4B — Call the MCP tool
 
-Call **`mcp__agentibridge-local__handoff`** with:
+Call **`mcp__agentibridge-mcp__handoff`** with:
 
 - `prompt`: the composed handoff prompt from 4A
 - `project_path`: `TARGET_PATH` (the resolved absolute path)
@@ -149,7 +149,7 @@ error, timeout, or `success: false` in response) → fall through to Step 4-fall
 
 ## Step 4-fallback — Memory file (when MCP is unavailable)
 
-This is the existing memory-file pipeline. Used when `agentibridge-local` is not
+This is the existing memory-file pipeline. Used when `agentibridge-mcp` is not
 available or the MCP call fails.
 
 ### 4F-A — Write the handoff file
@@ -205,7 +205,7 @@ Go to Step 5 (fallback report).
 ```
 ## Handoff dispatched to <target-project-name>
 
-**Path:** MCP (agentibridge-local)
+**Path:** MCP (agentibridge-mcp)
 **Session ID:** <session_id>
 **Resume command:**
   cd <TARGET_PATH> && claude --resume <session_id>
@@ -226,7 +226,7 @@ Next likely asks (pre-answered in the handoff):
 ```
 ## Handoff saved to <target-project-name>
 
-**Path:** Memory file (agentibridge-local unavailable)
+**Path:** Memory file (agentibridge-mcp unavailable)
 **Memory file:** <absolute path to handoff file>
 **Indexed in:** <absolute path to MEMORY.md>
 
@@ -250,7 +250,7 @@ Next likely asks (pre-answered in the handoff):
 
 - **Target path doesn't exist** → stop in Step 1, tell the user.
 - **Target has no auto-memory directory** → Step 1 creates it (fallback path only).
-- **`mcp__agentibridge-local__handoff` not loaded in session** → silent fallback to memory-file path. Suggest `agentibridge install` to the operator only if they ask why the MCP path was skipped.
+- **`mcp__agentibridge-mcp__handoff` not loaded in session** → silent fallback to memory-file path. Suggest `agentibridge install` to the operator only if they ask why the MCP path was skipped.
 - **MCP call returns `success: false` or errors out** → log the error, fall through to memory-file path.
 - **Current session has nothing to hand off** → refuse in Step 3.
 - **Operator runs this twice in one day for the same target** →
