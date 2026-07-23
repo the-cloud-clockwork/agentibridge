@@ -350,7 +350,7 @@ class TestBuildLaunchdPlist:
 
     def test_strips_quoted_values(self, tmp_path):
         env_file = tmp_path / "agentibridge.env"
-        env_file.write_text('FOO="bar"\nBAZ=\'qux\'\n')
+        env_file.write_text("FOO=\"bar\"\nBAZ='qux'\n")
         with patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path):
             plist = _build_launchd_plist(env_file, "/usr/bin/python3")
         assert plist["EnvironmentVariables"]["FOO"] == "bar"
