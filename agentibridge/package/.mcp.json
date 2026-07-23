@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "agentibridge-local": {
+    "agentibridge-mcp": {
       "type": "stdio",
       "command": "${AGENTIBRIDGE_BIN}",
       "args": [
