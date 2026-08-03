@@ -237,7 +237,7 @@ class TestCollectNow:
         srv._store = MagicMock()
         srv._collector = _mock_collector()
 
-        result = json.loads(srv.collect_now())
+        result = json.loads(asyncio.run(srv.collect_now()))
 
         assert result["success"] is True
         assert result["files_scanned"] == 5
@@ -255,7 +255,7 @@ class TestSearchSemantic:
         srv._collector = _mock_collector()
         srv._embedder = embedder
 
-        result = json.loads(srv.search_semantic(query="test"))
+        result = json.loads(asyncio.run(srv.search_semantic(query="test")))
         assert result["success"] is False
         assert "not available" in result["error"].lower()
 
@@ -270,7 +270,7 @@ class TestSearchSemantic:
         srv._collector = _mock_collector()
         srv._embedder = embedder
 
-        result = json.loads(srv.search_semantic(query="Docker setup"))
+        result = json.loads(asyncio.run(srv.search_semantic(query="Docker setup")))
         assert result["success"] is True
         assert result["count"] == 1
 
@@ -287,7 +287,7 @@ class TestGenerateSummary:
         srv._collector = _mock_collector()
         srv._embedder = embedder
 
-        result = json.loads(srv.generate_summary(session_id="test"))
+        result = json.loads(asyncio.run(srv.generate_summary(session_id="test")))
         assert result["success"] is True
         assert result["summary"] == "Built a REST API with auth."
 
@@ -301,7 +301,7 @@ class TestGenerateSummary:
         srv._collector = _mock_collector()
         srv._embedder = embedder
 
-        result = json.loads(srv.generate_summary(session_id="test"))
+        result = json.loads(asyncio.run(srv.generate_summary(session_id="test")))
         assert result["success"] is False
 
 
@@ -316,7 +316,7 @@ class TestRestoreSession:
         with patch("agentibridge.dispatch.restore_session_context") as mock_restore:
             mock_restore.return_value = "RESTORED SESSION CONTEXT\nproject info\nentries"
 
-            result = json.loads(srv.restore_session(session_id="test", last_n=20))
+            result = json.loads(asyncio.run(srv.restore_session(session_id="test", last_n=20)))
 
             assert result["success"] is True
             assert result["char_count"] > 0
@@ -330,7 +330,7 @@ class TestRestoreSession:
         with patch("agentibridge.dispatch.restore_session_context") as mock_restore:
             mock_restore.side_effect = ValueError("Session not found: test")
 
-            result = json.loads(srv.restore_session(session_id="test"))
+            result = json.loads(asyncio.run(srv.restore_session(session_id="test")))
             assert result["success"] is False
 
 

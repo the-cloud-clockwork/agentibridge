@@ -88,3 +88,21 @@ class TestConfigDefaults:
         monkeypatch.setenv("AGENTIBRIDGE_MAX_ENTRIES", "0")
         val = _env_int("AGENTIBRIDGE_MAX_ENTRIES", "500", min_val=0)
         assert val == 0
+
+
+@pytest.mark.unit
+class TestHostDefault:
+    def test_default_host_is_localhost(self, monkeypatch):
+        """Pin the localhost spelling — enterprise policies silently drop
+        client entries whose url names 127.0.0.1, and AGENTIBRIDGE_HOST
+        drives both the bind and any composed client url."""
+        import importlib
+
+        import agentibridge.config as config
+
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        monkeypatch.delenv("AGENTIBRIDGE_HOST", raising=False)
+        importlib.reload(config)
+        assert config.AGENTIBRIDGE_HOST == "localhost"
+        monkeypatch.undo()
+        importlib.reload(config)

@@ -373,7 +373,7 @@ def cmd_help(args: argparse.Namespace) -> None:
     print("  REDIS_URL                       Redis connection URL")
     print("  AGENTIBRIDGE_EMBEDDING_ENABLED  Enable semantic search (default: false)")
     print("  AGENTIBRIDGE_TRANSPORT          stdio or sse (default: stdio)")
-    print("  AGENTIBRIDGE_HOST               Bind address (default: 127.0.0.1)")
+    print("  AGENTIBRIDGE_HOST               Bind address (default: localhost)")
     print("  AGENTIBRIDGE_PORT               HTTP port (default: 8100)")
     print("  AGENTIBRIDGE_API_KEYS           Comma-separated API keys")
     print("  AGENTIBRIDGE_POLL_INTERVAL      Poll interval in seconds (default: 60)")
@@ -418,7 +418,7 @@ def cmd_connect(args: argparse.Namespace) -> None:
     config = {
         "mcpServers": {
             "agentibridge": {
-                "type": "http",
+                "type": "sse",
                 "url": f"http://{host}:{port}/sse",
                 "headers": {"X-API-Key": api_key},
             }
@@ -785,6 +785,14 @@ def _cmd_tunnel_setup() -> None:
 
 
 def cmd_tunnel(args: argparse.Namespace) -> None:
+    # The dockerized cloudflared reaches the native server via
+    # host.docker.internal — a loopback-only bind is unreachable from there.
+    host = os.getenv("AGENTIBRIDGE_HOST", "localhost")
+    if host in ("localhost", "127.0.0.1", "::1"):
+        print(f"  [!!] AGENTIBRIDGE_HOST={host} binds loopback only — the Docker cloudflared")
+        print("       container cannot reach it (502s). Set AGENTIBRIDGE_HOST=0.0.0.0 AND")
+        print("       AGENTIBRIDGE_API_KEYS in ~/.agentibridge/agentibridge.env, then restart.")
+        print()
     action = getattr(args, "action", "status")
     if action == "setup":
         _cmd_tunnel_setup()
@@ -804,7 +812,7 @@ def cmd_config(args: argparse.Namespace) -> None:
         ("REDIS_URL", ""),
         ("REDIS_KEY_PREFIX", "agentibridge"),
         ("AGENTIBRIDGE_TRANSPORT", "stdio"),
-        ("AGENTIBRIDGE_HOST", "127.0.0.1"),
+        ("AGENTIBRIDGE_HOST", "localhost"),
         ("AGENTIBRIDGE_PORT", "8100"),
         ("AGENTIBRIDGE_API_KEYS", ""),
         ("AGENTIBRIDGE_POLL_INTERVAL", "60"),
@@ -845,7 +853,10 @@ def _generate_env_template() -> None:
 
 # Transport: stdio (local MCP) or sse (HTTP remote)
 AGENTIBRIDGE_TRANSPORT=stdio
-AGENTIBRIDGE_HOST=127.0.0.1
+# localhost keeps the daemon loopback-only AND is the spelling enterprise
+# policies accept in client urls (127.0.0.1 urls are silently dropped).
+# Docker Cloudflare Tunnel users need AGENTIBRIDGE_HOST=0.0.0.0 (+ API keys).
+AGENTIBRIDGE_HOST=localhost
 AGENTIBRIDGE_PORT=8100
 
 # API key auth for SSE transport (comma-separated, empty = no auth)
@@ -1027,6 +1038,34 @@ def _install_launchd_db_agent(compose_file: Path) -> None:
         print(f"  {_LAUNCHD_DB_LABEL}: load failed — check launchctl print gui/{os.getuid()}/{_LAUNCHD_DB_LABEL}")
 
 
+def _systemd_user_available() -> bool:
+    """True when a user systemd session is reachable (False on e.g. WSL2 without systemd)."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-system-running"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return False
+    # "running"/"degraded" both mean a live user manager; "Failed to connect
+    # to bus" (rc!=0, no state word) means no user session at all.
+    state = (result.stdout or "").strip()
+    return state not in ("", "offline", "unknown") or result.returncode == 0
+
+
+def _print_manual_start_instructions(env_file: Path, python_bin: str) -> None:
+    # `serve --sse` (cmd_serve) loads AGENTIBRIDGE_ENV_FILE before starting —
+    # `python -m agentibridge` would skip the env file and serve defaults.
+    bridge_bin = shutil.which("agentibridge") or f"{python_bin} -m agentibridge.cli"
+    print("  [!!] No user systemd session (WSL2 without systemd=true?) — skipping service install.")
+    print("  Start the daemon manually (survives until logout):")
+    print(f"    nohup env AGENTIBRIDGE_ENV_FILE={env_file} \\")
+    print(f"      {bridge_bin} serve --sse >> ~/.agentibridge/agentibridge.log 2>&1 &")
+    print("  Databases: docker compose up -d  (run in ~/.agentibridge)")
+
+
 def _install_systemd_units(stack_dir: Path, env_file: Path, python_bin: str) -> None:
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
     systemd_dir.mkdir(parents=True, exist_ok=True)
@@ -1079,7 +1118,7 @@ def _install_systemd_units(stack_dir: Path, env_file: Path, python_bin: str) -> 
         print(f"  Removed obsolete {bridge_svc}")
 
     # Enable and start
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     for unit in ["agentibridge-db", "agentibridge"]:
         subprocess.run(["systemctl", "--user", "enable", unit], check=False)
         result = subprocess.run(["systemctl", "--user", "start", unit], check=False)
@@ -1104,13 +1143,23 @@ def cmd_install(args: argparse.Namespace) -> None:
         _launchd_bootout(_LAUNCHD_DB_LABEL)
     else:
         for unit in ("agentibridge", "agentibridge-bridge", "agentibridge-db"):
-            subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
-            subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
-    # Stop old agentibridge container if running from previous install
-    subprocess.run(["docker", "stop", "agentibridge"], capture_output=True, check=False)
-    subprocess.run(["docker", "rm", "agentibridge"], capture_output=True, check=False)
-    # Kill stale processes
-    subprocess.run(["pkill", "-f", "python.*-m agentibridge"], capture_output=True, check=False)
+            try:
+                subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
+                subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
+            except OSError:
+                break  # no systemctl binary at all — nothing to stop
+    # Stop old agentibridge container if running from previous install.
+    # Guarded: a missing docker/pkill binary must not abort the install —
+    # the MCP client registration below still has to run.
+    for cmd in (
+        ["docker", "stop", "agentibridge"],
+        ["docker", "rm", "agentibridge"],
+        ["pkill", "-f", "python.*-m agentibridge"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, check=False)
+        except OSError:
+            print(f"  [--] {cmd[0]} not available — skipped cleanup: {' '.join(cmd)}")
 
     # Ensure stack dir and env
     stack_dir = _ensure_stack_dir()
@@ -1152,12 +1201,34 @@ def cmd_install(args: argparse.Namespace) -> None:
         subprocess.run(["docker", "compose", "up", "-d"], cwd=stack_dir, check=False)
         _install_launchd_db_agent(compose_dest)
         _install_launchd_agent(env_file, python_bin)
-    else:
+    elif _systemd_user_available():
         _install_systemd_units(stack_dir, env_file, python_bin)
+    else:
+        # Client registration below must still run — a missing service
+        # manager is not a reason to leave the MCP entry unwritten.
+        _print_manual_start_instructions(env_file, python_bin)
     print()
 
+    transport = getattr(args, "transport", "stdio")
+    if transport == "sse" and env_file.exists():
+        # Keep the env file's transport in agreement with the registered
+        # url entry so a manual start serves what the client expects.
+        env_text = env_file.read_text()
+        if re.search(r"^AGENTIBRIDGE_TRANSPORT=", env_text, flags=re.MULTILINE):
+            new_text = re.sub(
+                r"^AGENTIBRIDGE_TRANSPORT=.*$",
+                "AGENTIBRIDGE_TRANSPORT=sse",
+                env_text,
+                flags=re.MULTILINE,
+            )
+        else:
+            new_text = env_text.rstrip("\n") + "\nAGENTIBRIDGE_TRANSPORT=sse\n"
+        if new_text != env_text:
+            env_file.write_text(new_text)
+            print("  Set AGENTIBRIDGE_TRANSPORT=sse in agentibridge.env")
+
     try:
-        install_claude_assets()
+        install_claude_assets(transport)
     except Exception as exc:
         print(f"  [!!] Claude asset install skipped: {exc}")
 
@@ -2169,7 +2240,18 @@ def main() -> None:
     serve_group.add_argument("--stdio", action="store_true", help="Run in stdio mode (default — for Claude Code)")
     serve_group.add_argument("--sse", action="store_true", help="Run in SSE/HTTP mode")
 
-    subparsers.add_parser("install", help="Install as systemd user service")
+    install_parser = subparsers.add_parser("install", help="Install as systemd user service")
+    install_parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help=(
+            "MCP client registration mode written to ~/.claude.json: "
+            "stdio (default, Claude Code spawns the server per session) or "
+            "sse (url entry pointing at the shared daemon on http://localhost:<port>/sse; "
+            "use where org policy filters stdio MCP servers)"
+        ),
+    )
 
     # uninstall
     subparsers.add_parser("uninstall", help="Remove systemd service")

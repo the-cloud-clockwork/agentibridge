@@ -15,6 +15,19 @@ Expose AgentiBridge to the internet securely using Cloudflare Tunnel. No port fo
 └──────────┘     └─────────────────┘     └─────────────┘     └────────────────┘
 ```
 
+## Prerequisite — bind beyond loopback
+
+The dockerized `cloudflared` reaches the native server via
+`host.docker.internal`, which a loopback-only bind cannot serve (every
+tunneled request 502s). In `~/.agentibridge/agentibridge.env` set:
+
+```bash
+AGENTIBRIDGE_HOST=0.0.0.0
+AGENTIBRIDGE_API_KEYS=your-secret-key   # never open the bind without auth
+```
+
+then restart the server. The default (`localhost`) is loopback-only on purpose.
+
 ## Quick Tunnel (Zero Config)
 
 No Cloudflare account needed. Generates a temporary `*.trycloudflare.com` URL.

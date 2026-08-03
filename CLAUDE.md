@@ -81,7 +81,7 @@ All configured in `~/.agentibridge/agentibridge.env`:
 REDIS_URL=redis://localhost:6379/0
 REDIS_KEY_PREFIX=agentibridge
 AGENTIBRIDGE_TRANSPORT=sse
-AGENTIBRIDGE_HOST=0.0.0.0
+AGENTIBRIDGE_HOST=localhost         # bind + client-url host; spell localhost, not 127.0.0.1
 AGENTIBRIDGE_PORT=8100
 AGENTIBRIDGE_API_KEYS=              # comma-separated, empty = no auth
 CLAUDE_CODE_HOME_DIR=~/.claude

@@ -92,7 +92,7 @@ class TestCmdConnect:
         assert "Claude Code CLI" in output
         assert "ChatGPT" in output
         assert "localhost:8100" in output
-        assert '"type": "http"' in output
+        assert '"type": "sse"' in output
         assert "/sse" in output
         assert "/health" in output
 
@@ -1113,6 +1113,48 @@ class TestCmdInstall:
         assert not any(call[0] == "launchctl" for call in calls)
         assert ["systemctl", "--user", "daemon-reload"] in calls
         assert (tmp_path / "LaunchAgents").exists() is False
+
+    def test_no_systemd_still_registers_claude_assets(self, tmp_path):
+        """WSL2 without systemd: unit install is skipped, but the MCP client
+        registration (install_claude_assets) must still run."""
+
+        def _run(cmd, *a, **kw):
+            if cmd[:2] == ["systemctl", "--user"]:
+                raise FileNotFoundError("systemctl")
+            return _ok()
+
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
+            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
+            patch("agentibridge.cli.install_claude_assets") as mock_assets,
+            patch("agentibridge.cli.subprocess.run", side_effect=_run),
+        ):
+            cmd_install(MagicMock(transport="stdio"))
+
+        mock_assets.assert_called_once_with("stdio")
+        systemd_dir = tmp_path / ".config" / "systemd" / "user"
+        assert not (systemd_dir / "agentibridge.service").exists()
+
+    def test_sse_transport_passed_and_env_updated(self, tmp_path):
+        """--transport sse reaches install_claude_assets and flips the env
+        file's AGENTIBRIDGE_TRANSPORT so a manual start serves what the
+        registered url entry expects."""
+        stack_dir = tmp_path / "stack"
+
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli._STACK_DIR", stack_dir),
+            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
+            patch("agentibridge.cli.install_claude_assets") as mock_assets,
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
+        ):
+            cmd_install(MagicMock(transport="sse"))
+
+        mock_assets.assert_called_once_with("sse")
+        env_file = stack_dir / "agentibridge.env"
+        if env_file.exists():
+            assert "AGENTIBRIDGE_TRANSPORT=sse" in env_file.read_text()
 
 
 @pytest.mark.unit

@@ -34,10 +34,12 @@ Available tools (17):
 
 import json
 import os
+from functools import partial
 from pathlib import Path
 import sys
 from typing import Dict
 
+import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
 from agentibridge.logging import log
@@ -99,7 +101,7 @@ _oauth_provider, _oauth_settings = _build_oauth_config()
 
 mcp = FastMCP(
     "agentibridge",
-    host=os.getenv("AGENTIBRIDGE_HOST", "127.0.0.1"),
+    host=os.getenv("AGENTIBRIDGE_HOST", "localhost"),
     port=int(os.getenv("AGENTIBRIDGE_PORT", "8100")),
     json_response=True,
     auth_server_provider=_oauth_provider,
@@ -393,7 +395,7 @@ def search_sessions(
 
 
 @mcp.tool()
-def agent_search(
+async def agent_search(
     query: str,
     model: str = "opus",
     timeout: int = 300,
@@ -420,7 +422,7 @@ def agent_search(
         ``result`` is the agent's answer (ideally JSON with matches, but
         free-form is tolerated).
     """
-    from agentibridge.claude_runner import run_claude_sync
+    from agentibridge.claude_runner import run_claude
 
     prompt = (
         "You are a reconnaissance helper for the agentibridge fleet. "
@@ -440,7 +442,7 @@ def agent_search(
         prompt += f"\n\nAdditional instructions:\n{extra_instructions}"
 
     try:
-        result = run_claude_sync(
+        result = await run_claude(
             prompt,
             model=model,
             timeout=timeout,
@@ -463,7 +465,7 @@ def agent_search(
 
 
 @mcp.tool()
-def collect_now() -> str:
+async def collect_now() -> str:
     """Trigger immediate transcript collection.
 
     Forces the collector to scan all transcript files now instead of
@@ -474,7 +476,7 @@ def collect_now() -> str:
     """
     try:
         collector = _get_collector()
-        stats = collector.collect_once()
+        stats = await anyio.to_thread.run_sync(collector.collect_once)
 
         return json.dumps(
             {
@@ -494,7 +496,7 @@ def collect_now() -> str:
 
 
 @mcp.tool()
-def search_semantic(
+async def search_semantic(
     query: str,
     project: str = "",
     limit: int = 10,
@@ -522,10 +524,13 @@ def search_semantic(
                 }
             )
 
-        results = embedder.search_semantic(
-            query=query,
-            project=project if project else None,
-            limit=limit,
+        results = await anyio.to_thread.run_sync(
+            partial(
+                embedder.search_semantic,
+                query=query,
+                project=project if project else None,
+                limit=limit,
+            )
         )
 
         return json.dumps(
@@ -543,7 +548,7 @@ def search_semantic(
 
 
 @mcp.tool()
-def generate_summary(
+async def generate_summary(
     session_id: str,
 ) -> str:
     """Generate an AI summary for a session using Claude.
@@ -559,7 +564,7 @@ def generate_summary(
     """
     try:
         embedder = _get_embedder()
-        summary = embedder.generate_summary(session_id)
+        summary = await anyio.to_thread.run_sync(embedder.generate_summary, session_id)
 
         return json.dumps(
             {
@@ -580,7 +585,7 @@ def generate_summary(
 
 
 @mcp.tool()
-def restore_session(
+async def restore_session(
     session_id: str,
     last_n: int = 20,
 ) -> str:
@@ -599,7 +604,7 @@ def restore_session(
     try:
         from agentibridge.dispatch import restore_session_context
 
-        context = restore_session_context(session_id, last_n=last_n)
+        context = await anyio.to_thread.run_sync(partial(restore_session_context, session_id, last_n=last_n))
 
         return json.dumps(
             {

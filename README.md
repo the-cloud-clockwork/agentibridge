@@ -83,7 +83,18 @@ agentibridge install
 curl http://localhost:8100/health
 ```
 
-Then add AgentiBridge to `~/.mcp.json`:
+`agentibridge install` registers the MCP entry in `~/.claude.json` for you —
+a `stdio` entry by default, or a url entry with `--transport sse`:
+
+```bash
+agentibridge install --transport sse   # url entry: http://localhost:8100/sse
+```
+
+Use `--transport sse` where an enterprise policy filters stdio MCP servers
+(the entry silently never appears in `claude mcp list`). Client urls must
+spell the host `localhost` — the same policies drop `127.0.0.1` urls. See
+[Connecting Clients](docs/getting-started/connecting-clients.md) for the
+full policy note, or register manually:
 
 ```json
 {

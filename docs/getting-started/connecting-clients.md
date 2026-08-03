@@ -22,12 +22,20 @@ curl http://localhost:8100/health
 
 ## Claude Code CLI
 
-Add to `~/.mcp.json` (or project-level `.mcp.json`):
+The installer can register the entry for you:
+
+```bash
+agentibridge install                  # stdio entry (default) — Claude Code spawns the server per session
+agentibridge install --transport sse  # url entry pointing at the shared daemon
+```
+
+Or add manually to `~/.mcp.json` (or project-level `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "agentibridge": {
+      "type": "sse",
       "url": "http://localhost:8100/sse",
       "headers": {
         "X-API-Key": "your-api-key"
@@ -36,6 +44,27 @@ Add to `~/.mcp.json` (or project-level `.mcp.json`):
   }
 }
 ```
+
+### Enterprise policy note — stdio and `127.0.0.1` are silently filtered
+
+Some Claude Code Enterprise policies (organisation OAuth tokens) filter MCP
+servers out of the client **silently** — no error, no "failed to connect",
+the server just never appears:
+
+- **stdio entries are dropped entirely.** Use `install --transport sse`.
+- **urls spelling the host `127.0.0.1` are also dropped.** The byte-identical
+  entry spelled `localhost` is accepted. Always spell it `localhost`.
+
+`claude mcp list` is the verification command, with three distinct outcomes:
+
+| Output | Meaning |
+|---|---|
+| `✔ Connected` | Working |
+| `✗ Failed to connect` | Entry accepted; daemon down or wrong port |
+| No line at all | Client is not reading the entry — policy filter or host spelling |
+
+If one local server appears and another doesn't, diff the working entry
+against the broken one — that comparison is what isolates a policy filter.
 
 Verify:
 ```bash

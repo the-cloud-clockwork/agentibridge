@@ -112,6 +112,28 @@ See [Connecting Clients — Troubleshooting](../getting-started/connecting-clien
 
 ---
 
+## Server absent from `claude mcp list` (no line, no error)
+
+The entry sits in `~/.claude.json` yet `claude mcp list` prints **no line at
+all** for it, and `claude mcp get <name>` answers `No MCP server named
+"<name>"`. This reads as "never installed" — it usually isn't. Some Claude
+Code Enterprise policies (organisation OAuth tokens) filter entries silently:
+
+1. **stdio entries are dropped.** Re-register as a url entry:
+   `agentibridge install --transport sse`.
+2. **`127.0.0.1` urls are dropped.** The identical url spelled `localhost`
+   is accepted. Check the `url` field's host spelling.
+
+Discriminate the three failures with `claude mcp list`: `✔ Connected` =
+working; `✗ Failed to connect` = entry read, daemon down/wrong port; no line
+= entry not read (policy or spelling). To isolate which rule bites, diff the
+broken entry against any local MCP server that **does** appear under the same
+token — hold daemon, port, and transport constant and change one field at a
+time. A personal (non-organisation) token showing the hidden servers confirms
+the filter is account policy, not local misconfiguration.
+
+---
+
 ## No semantic search results (0 chunks)
 
 ```json
