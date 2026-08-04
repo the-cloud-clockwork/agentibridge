@@ -45,7 +45,7 @@ When deploying AgentiBridge:
 - **Restrict network access** using firewalls or Cloudflare Access policies
 - **Keep dependencies updated** — enable Dependabot for automated security updates
 - **Review OAuth configuration** if using OAuth 2.1 — ensure redirect URIs are tightly scoped
-- **Bind to localhost** by default (`AGENTIBRIDGE_HOST=127.0.0.1`) and only open to networks when needed
+- **Bind to localhost** by default (`AGENTIBRIDGE_HOST=localhost`) and only open to networks when needed — spell it `localhost`, not `127.0.0.1`: some enterprise Claude Code policies silently drop client entries whose url names the dotted quad
 
 ## Scope
 

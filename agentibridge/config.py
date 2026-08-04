@@ -92,7 +92,7 @@ AGENTIBRIDGE_TRANSPORT = os.getenv("AGENTIBRIDGE_TRANSPORT", "stdio")
 AGENTIBRIDGE_PORT = _env_int("AGENTIBRIDGE_PORT", "8100", min_val=1, max_val=65535)
 
 # Host for SSE/HTTP transport
-AGENTIBRIDGE_HOST = os.getenv("AGENTIBRIDGE_HOST", "127.0.0.1")
+AGENTIBRIDGE_HOST = os.getenv("AGENTIBRIDGE_HOST", "localhost")
 
 # Comma-separated API keys for remote access auth
 AGENTIBRIDGE_API_KEYS = os.getenv("AGENTIBRIDGE_API_KEYS", "")

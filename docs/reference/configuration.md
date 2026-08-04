@@ -50,7 +50,7 @@ AgentiBridge has two run modes that can run simultaneously without conflict:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AGENTIBRIDGE_TRANSPORT` | `stdio` | Transport mode: `stdio` (local MCP via stdin/stdout) or `sse` (HTTP/SSE for remote clients) |
-| `AGENTIBRIDGE_HOST` | `127.0.0.1` | Bind address for SSE transport. Use `0.0.0.0` to accept connections from any interface |
+| `AGENTIBRIDGE_HOST` | `localhost` | Bind address for SSE transport. Use `0.0.0.0` to accept connections from any interface (set `AGENTIBRIDGE_API_KEYS` too). Client urls must spell `localhost` — enterprise policies silently drop `127.0.0.1` urls |
 | `AGENTIBRIDGE_PORT` | `8100` | HTTP port for SSE transport |
 | `AGENTIBRIDGE_API_KEYS` | _(none)_ | Comma-separated list of API keys for authentication. Empty = no auth required |
 

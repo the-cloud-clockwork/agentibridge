@@ -12,7 +12,7 @@ Remote clients connect via:
 
 Environment:
     AGENTIBRIDGE_TRANSPORT  — "stdio" (default) or "sse"
-    AGENTIBRIDGE_HOST       — Bind address (default: 127.0.0.1)
+    AGENTIBRIDGE_HOST       — Bind address (default: localhost)
     AGENTIBRIDGE_PORT       — HTTP port (default: 8100)
     AGENTIBRIDGE_API_KEYS   — Comma-separated valid API keys (empty = no auth)
 """

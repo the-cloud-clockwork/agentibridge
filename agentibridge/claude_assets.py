@@ -128,12 +128,25 @@ def _merge_claude_md() -> None:
     print(f"  [OK] Merged agentibridge block into {dst} ({len(body):,} bytes)")
 
 
+def _read_env_file_value(key: str) -> str:
+    """Read one ``KEY=value`` line from ~/.agentibridge/agentibridge.env (last wins)."""
+    env_file = Path.home() / ".agentibridge" / "agentibridge.env"
+    value = ""
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+    return value
+
+
 def _resolve_template_vars() -> dict[str, str]:
-    """Values substituted into package/.mcp.json at install time."""
+    """Values substituted into the package MCP templates at install time."""
     return {
         "AGENTIBRIDGE_BIN": shutil.which("agentibridge") or "agentibridge",
         "PYTHON": shutil.which("python3") or "python3",
         "ENV_FILE": str(Path.home() / ".agentibridge" / "agentibridge.env"),
+        "PORT": _read_env_file_value("AGENTIBRIDGE_PORT") or os.getenv("AGENTIBRIDGE_PORT", "8100"),
     }
 
 
@@ -181,9 +194,21 @@ def _remove_mcp_from_user_scope(server_names: list[str]) -> None:
     print(f"  [RM] Removed user-scope MCP servers: {', '.join(removed)}")
 
 
-def _load_mcp_template() -> dict:
-    """Load and substitute placeholders in package/.mcp.json. Returns parsed dict."""
-    src = PACKAGE_DIR / ".mcp.json"
+_MCP_TEMPLATES = {
+    "stdio": ".mcp.json",
+    "sse": ".mcp.sse.json",
+}
+
+
+def _load_mcp_template(transport: str = "stdio") -> dict:
+    """Load and substitute placeholders in the package MCP template for ``transport``.
+
+    ``sse`` registers a url entry (host spelled ``localhost`` — enterprise
+    policies silently drop stdio entries and ``127.0.0.1`` urls). Both
+    templates declare the same server name, so switching transports
+    replaces the entry instead of stranding the old one.
+    """
+    src = PACKAGE_DIR / _MCP_TEMPLATES.get(transport, ".mcp.json")
     if not src.exists():
         return {}
     raw = src.read_text()
@@ -196,28 +221,41 @@ def _load_mcp_template() -> dict:
         return {}
 
 
-def _install_mcp() -> None:
-    config = _load_mcp_template()
+def _install_mcp(transport: str = "stdio") -> None:
+    config = _load_mcp_template(transport)
     servers = config.get("mcpServers", {})
+    if transport == "sse":
+        api_keys = _read_env_file_value("AGENTIBRIDGE_API_KEYS")
+        if api_keys:
+            first_key = api_keys.split(",")[0].strip()
+            for server in servers.values():
+                if "url" in server:
+                    server["headers"] = {"X-API-Key": first_key}
     if servers:
         _merge_mcp_to_user_scope(servers)
 
 
 def _uninstall_mcp() -> None:
-    """Remove the server names declared in package/.mcp.json from ~/.claude.json."""
-    src = PACKAGE_DIR / ".mcp.json"
-    if not src.exists():
-        return
-    try:
-        config = json.loads(src.read_text())
-    except json.JSONDecodeError:
-        return
-    servers = config.get("mcpServers", {})
-    if servers:
-        _remove_mcp_from_user_scope(list(servers.keys()))
+    """Remove every server name declared in ANY package MCP template from ~/.claude.json.
+
+    Sweeping the union of both templates keeps uninstall correct regardless
+    of which transport the last install registered.
+    """
+    names: set[str] = set()
+    for template in _MCP_TEMPLATES.values():
+        src = PACKAGE_DIR / template
+        if not src.exists():
+            continue
+        try:
+            config = json.loads(src.read_text())
+        except json.JSONDecodeError:
+            continue
+        names.update(config.get("mcpServers", {}))
+    if names:
+        _remove_mcp_from_user_scope(sorted(names))
 
 
-def install_claude_assets() -> None:
+def install_claude_assets(transport: str = "stdio") -> None:
     """Symlink package/{skills,commands,agents,rules}/ into ~/.claude/, merge CLAUDE.md and MCP servers."""
     if not PACKAGE_DIR.is_dir():
         return
@@ -225,7 +263,7 @@ def install_claude_assets() -> None:
     for subdir, label, filter_fn in _SUBDIRS:
         _symlink_dir_contents(PACKAGE_DIR / subdir, CLAUDE_HOME / subdir, label=label, filter_fn=filter_fn)
     _merge_claude_md()
-    _install_mcp()
+    _install_mcp(transport)
 
 
 def _strip_claude_md_block() -> None:
