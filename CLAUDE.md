@@ -62,6 +62,7 @@ Host (native)                    Docker (databases only)
 | `parser.py` | Pure-function JSONL transcript parser |
 | `store.py` | SessionStore (Redis + filesystem fallback) |
 | `collector.py` | Background polling daemon |
+| `daemon.py` | Daemon lifecycle for the sse transport — flock'd `ensure_running`, systemd/pidfile backends, dual teardown |
 | `transport.py` | SSE/HTTP transport + REST endpoints |
 | `registry.py` | A2A agent registry (Phase 6) |
 | `local_agents.py` | Session-gated local agent discovery — AgentiHub packages on disk |
@@ -82,6 +83,8 @@ REDIS_URL=redis://localhost:6379/0
 REDIS_KEY_PREFIX=agentibridge
 AGENTIBRIDGE_TRANSPORT=sse
 AGENTIBRIDGE_HOST=localhost         # bind + client-url host; spell localhost, not 127.0.0.1
+AGENTIBRIDGE_MCP_REGISTRATION=      # stdio|sse — registration shape recorded by `install --transport`; plain install keeps it
+AGENTIBRIDGE_MCP_SUPERVISOR=        # systemd|pidfile — force daemon backend; empty = auto-detect user systemd bus
 AGENTIBRIDGE_PORT=8100
 AGENTIBRIDGE_API_KEYS=              # comma-separated, empty = no auth
 CLAUDE_CODE_HOME_DIR=~/.claude

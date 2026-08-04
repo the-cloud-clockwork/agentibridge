@@ -10,111 +10,87 @@ Complete reference for the `agentibridge` command-line tool.
 
 ---
 
-## Docker Stack
+## Service Management
+
+AgentiBridge runs **natively on the host**; only Redis + Postgres run in Docker.
 
 ### `agentibridge install`
 
-Start the Docker stack (AgentiBridge + Redis + Postgres).
+Install the systemd user services (databases + native app), register the MCP
+entry in `~/.claude.json`, and converge the daemon onto the new config.
 
 ```
-agentibridge install [--rebuild] [--test]
+agentibridge install [--transport {stdio,sse}]
 ```
-
-On first run, copies the bundled `docker-compose.yml` and `agentibridgeagentibridge.env.example` template to
-`~/.agentibridge/`. If `agentibridge.env` does not yet exist the command exits immediately
-with instructions to edit it before retrying.
-
-Before starting, the command validates that all [required env vars](#env-required-variables)
-are present in `agentibridge.env`. If any are missing it prints them and exits with code 1.
-
-State detection:
-- **running** — prints advisory, pulls latest images, and restarts
-- **partial** — starts missing containers
-- **stopped** — starts the full stack
-
-**Flags**
 
 | Flag | Description |
 |------|-------------|
-| `--rebuild` | Force `--pull always --build` before starting (equivalent to `docker compose up --build --pull always -d`) |
-| `--test` | Dev mode: build from local source with fresh config (see below) |
+| `--transport stdio` | Register a stdio entry — Claude Code spawns the server per session (default on a fresh box) |
+| `--transport sse` | Register a url entry `http://localhost:<port>/sse` pointing at the shared daemon — required where an enterprise policy silently filters stdio MCP servers |
 
-#### `--test` — Local dev testing mode
+The chosen shape is recorded as `AGENTIBRIDGE_MCP_REGISTRATION` in
+`~/.agentibridge/agentibridge.env`; a later plain `agentibridge install`
+**keeps** it, so re-installs never silently downgrade an sse registration.
 
-For developing AgentiBridge itself. Must be run from the repo root (where `Dockerfile` and
-`docker-compose.yml` exist).
-
-```bash
-cd ~/dev/agentibridge
-pip install -e .
-agentibridge install --test
-```
-
-**Which files each mode uses:**
-
-| Mode | Compose file | Env file | Image |
-|------|-------------|----------|-------|
-| `agentibridge install` | `~/.agentibridge/docker-compose.yml` | `~/.agentibridge/agentibridge.env` | Pulls from Docker Hub |
-| `agentibridge install --test` | `./docker-compose.yml` (repo root) | `./.env` (repo root) | Builds from local Dockerfile |
-
-> **Important:** Each mode reads a different env file. If you configure embedding or auth vars in `agentibridge.env`, those won't be seen by `--test` unless you also set them in the repo root `.env` (and vice versa).
-
-What it does:
-
-1. **Ensures `~/.agentibridge/` exists** — creates it from templates if missing. Never removes or overwrites an existing directory.
-2. **Ensures `.env`** — copies `agentibridge.env.example` to `.env` at the repo root if it doesn't exist.
-3. **Builds from local source** — runs `docker compose -f docker-compose.yml --env-file .env up --build -d`
-   using the repo root compose file (which has `build: context: .`) instead of the pip-distributed
-   compose file that pulls `tccw/agentibridge:latest` from Docker Hub.
-4. **Auto-starts the dispatch (native)** if `DISPATCH_SECRET` is configured in the repo root `.env`.
+Install ends with an unconditional daemon restart (`ensure_running`) so the
+running process always matches the config just written. On machines without a
+user systemd session (WSL2 without `systemd=true`) the **pidfile backend**
+starts the daemon instead — see `agentibridge daemon` below.
 
 ---
 
-### `agentibridge stop`
+### `agentibridge uninstall`
 
-Stop the Docker stack.
-
-```
-agentibridge stop
-```
-
-Runs `docker compose down` against the managed stack in `~/.agentibridge/`.
+Stop the daemon (both backends), remove the systemd units, deregister the MCP
+entry, and **verify** teardown — warning if any daemon process survived.
+Config files in `~/.agentibridge/` are not removed.
 
 ---
 
-### `agentibridge restart`
+### `agentibridge daemon <start|stop|restart|status>`
 
-Restart all containers in the stack without recreating them.
+Daemon lifecycle for the network (sse) transport. Backend is auto-selected:
+
+| Backend | Selected when | Supervision |
+|---------|---------------|-------------|
+| `systemd` | a user systemd bus answers `systemctl --user show-environment` | unit restarts on crash, survives reboot |
+| `pidfile` | no user bus (e.g. WSL2 without systemd) | none — detached `serve --sse` child dies with the machine; run `agentibridge daemon start` once per boot |
+
+Pidfile-backend state lives in `~/.agentibridge/`: pid in `mcp-daemon.pid`,
+logs in `logs/mcp-daemon.log`. Force a backend with
+`AGENTIBRIDGE_MCP_SUPERVISOR=systemd|pidfile`. `stop` always tears down both
+backends. `restart` is an unconditional stop-then-start convergence.
+
+---
+
+### `agentibridge stop` / `agentibridge restart`
+
+`stop` = daemon stop (both backends) + database unit stop.
+`restart` = `daemon restart` — stops whatever runs and starts on the current
+config, so env-file changes (port, keys, transport) take effect.
+
+---
+
+### `agentibridge serve`
+
+Run the MCP server in the foreground.
 
 ```
-agentibridge restart
+agentibridge serve [--stdio | --sse]
 ```
 
-Runs `docker compose restart`.
-
-> **Important:** `restart` does **not** reload `agentibridge.env`. Docker Compose `restart` only sends SIGHUP to existing containers — environment variables are baked in at container creation time. If you changed `agentibridge.env` (e.g., enabled OAuth, changed API keys, updated ports), you must recreate the containers:
->
-> ```bash
-> agentibridge stop   # docker compose down
-> agentibridge install    # docker compose up -d (recreates with new env)
-> ```
+Loads `$AGENTIBRIDGE_ENV_FILE` (default `~/.agentibridge/agentibridge.env`)
+first; the flag overrides any inherited `AGENTIBRIDGE_TRANSPORT`. `--stdio` is
+what the registered stdio entry invokes; `--sse` is what the pidfile backend
+runs under the hood.
 
 ---
 
 ### `agentibridge logs`
 
-Stream or tail Docker stack logs.
-
-```
-agentibridge logs [--tail N] [--follow]
-```
-
-**Flags**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tail N` | `100` | Number of lines to show from the end of each container's log |
-| `--follow`, `-f` | off | Follow log output (streams until Ctrl-C) |
+View service logs (`--follow` to stream): journalctl on systemd machines,
+launchd log files on macOS. On the pidfile backend read
+`~/.agentibridge/logs/mcp-daemon.log` directly.
 
 ---
 
@@ -178,55 +154,6 @@ source (`env` = set in environment, `default` = using built-in default).
 | Flag | Description |
 |------|-------------|
 | `--generate-env` | Print a fully-commented `.env` template to stdout. Redirect to a file to bootstrap a new deployment: `agentibridge config --generate-env > .env` |
-
----
-
-## Dispatch Bridge
-
-The dispatch (native) is a host-side HTTP proxy that allows the Dockerised AgentiBridge
-container to call the Claude CLI binary installed on the host machine.
-
-### `agentibridge bridge start`
-
-Start the dispatch (native) as a detached background process.
-
-```
-agentibridge bridge start
-```
-
-Reads `DISPATCH_SECRET` and `DISPATCH_BRIDGE_PORT` (default `8101`) from
-`~/.agentibridge/agentibridge.env`. If `DISPATCH_SECRET` is not set the command exits
-with an error.
-
-Checks whether an existing bridge process is already running (via `pgrep`) and
-exits early if so.
-
-Log output is written to `/tmp/dispatch.log`.
-
----
-
-### `agentibridge bridge stop`
-
-Stop the dispatch (native).
-
-```
-agentibridge bridge stop
-```
-
-Sends SIGTERM to all `agentibridge.dispatch` processes found by `pgrep`.
-
----
-
-### `agentibridge bridge logs`
-
-Tail the dispatch (native) log file.
-
-```
-agentibridge bridge logs
-```
-
-Runs `tail -f /tmp/dispatch.log`. Exits with code 1 if the log file does
-not exist.
 
 ---
 
@@ -301,39 +228,6 @@ health check.
 
 ---
 
-### `agentibridge install`
-
-Install AgentiBridge as a systemd user service.
-
-```
-agentibridge install [--docker | --native]
-```
-
-Creates `~/.agentibridge/env` (if absent), copies the appropriate `.service`
-file to `~/.config/systemd/user/`, then runs `systemctl --user enable --now agentibridge`.
-
-**Flags**
-
-| Flag | Description |
-|------|-------------|
-| `--docker` | Use the Docker-based service unit (default) |
-| `--native` | Use the native Python service unit |
-
----
-
-### `agentibridge uninstall`
-
-Remove the systemd user service.
-
-```
-agentibridge uninstall
-```
-
-Stops and disables the service, removes the `.service` file, and reloads systemd.
-Config files in `~/.agentibridge/` are **not** removed.
-
----
-
 ### `agentibridge locks`
 
 Inspect Redis keys, file position locks, and running bridge processes.
@@ -396,7 +290,7 @@ command exits with a descriptive error. These are checked in `~/.agentibridge/ag
 | `POSTGRES_USER` | Postgres username |
 | `POSTGRES_PASSWORD` | Postgres password |
 | `POSTGRES_DB` | Postgres database name |
-| `AGENTIBRIDGE_TRANSPORT` | Transport mode (should be `sse` for Docker) |
+| `AGENTIBRIDGE_TRANSPORT` | Daemon serve mode (`sse` for the shared daemon; the MCP registration shape is tracked separately as `AGENTIBRIDGE_MCP_REGISTRATION`) |
 | `AGENTIBRIDGE_PORT` | HTTP port for SSE transport (e.g. `8100`) |
 
 Generate a fully-annotated template:
