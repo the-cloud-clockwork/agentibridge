@@ -32,6 +32,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from agentibridge import daemon as _daemon
 from agentibridge.claude_assets import install_claude_assets, uninstall_claude_assets
 
 
@@ -800,6 +801,20 @@ def cmd_tunnel(args: argparse.Namespace) -> None:
         _cmd_tunnel_status()
 
 
+def cmd_daemon(args: argparse.Namespace) -> None:
+    action = getattr(args, "action", "status")
+    if action in ("start", "restart"):
+        ok = _daemon.ensure_running(restart=(action == "restart"))
+        if not ok:
+            sys.exit(1)
+    elif action == "stop":
+        _daemon.stop()
+        print("  Daemon stopped (both backends).")
+    else:
+        for key, value in _daemon.status().items():
+            print(f"  {key}: {value}")
+
+
 def cmd_config(args: argparse.Namespace) -> None:
     if args.generate_env:
         _generate_env_template()
@@ -1055,15 +1070,10 @@ def _systemd_user_available() -> bool:
     return state not in ("", "offline", "unknown") or result.returncode == 0
 
 
-def _print_manual_start_instructions(env_file: Path, python_bin: str) -> None:
-    # `serve --sse` (cmd_serve) loads AGENTIBRIDGE_ENV_FILE before starting —
-    # `python -m agentibridge` would skip the env file and serve defaults.
-    bridge_bin = shutil.which("agentibridge") or f"{python_bin} -m agentibridge.cli"
-    print("  [!!] No user systemd session (WSL2 without systemd=true?) — skipping service install.")
-    print("  Start the daemon manually (survives until logout):")
-    print(f"    nohup env AGENTIBRIDGE_ENV_FILE={env_file} \\")
-    print(f"      {bridge_bin} serve --sse >> ~/.agentibridge/agentibridge.log 2>&1 &")
-    print("  Databases: docker compose up -d  (run in ~/.agentibridge)")
+def _print_pidfile_backend_note() -> None:
+    print("  [!!] No user systemd session (WSL2 without systemd=true?) — skipping unit install.")
+    print("  The daemon runs under the pidfile backend instead (started below).")
+    print("  No supervisor: it dies with the machine — rerun `agentibridge daemon start` after reboot.")
 
 
 def _install_systemd_units(stack_dir: Path, env_file: Path, python_bin: str) -> None:
@@ -1206,7 +1216,7 @@ def cmd_install(args: argparse.Namespace) -> None:
     else:
         # Client registration below must still run — a missing service
         # manager is not a reason to leave the MCP entry unwritten.
-        _print_manual_start_instructions(env_file, python_bin)
+        _print_pidfile_backend_note()
     print()
 
     transport = getattr(args, "transport", "stdio")
@@ -1232,6 +1242,13 @@ def cmd_install(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"  [!!] Claude asset install skipped: {exc}")
 
+    if not is_darwin:
+        # Converge the PROCESS, not just the config: the url, the unit and
+        # the env file were just rewritten — unconditional restart is
+        # cheaper than change-detection, whose failure mode is silent.
+        print()
+        _daemon.ensure_running(restart=True, env_file=env_file, stack_dir=stack_dir)
+
     print()
     print("Check status with: agentibridge status")
     if is_darwin:
@@ -1252,6 +1269,9 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
                 plist_path.unlink()
                 print(f"  Removed {plist_path}")
     else:
+        # Stop the daemon (both backends) BEFORE removing units — an orphan
+        # with the CLI removed has nothing left to manage it.
+        _daemon.stop()
         systemd_dir = Path.home() / ".config" / "systemd" / "user"
         for unit in ("agentibridge", "agentibridge-db", "agentibridge-bridge"):
             try:
@@ -1268,6 +1288,12 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
             subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
         except Exception:
             pass
+
+        # Verify teardown actually took — a survivor here is unmanageable
+        # once the CLI is gone, so it must be surfaced, not assumed away.
+        state = _daemon.status()
+        if state["pidfile_alive"] or state["port_open"]:
+            print(f"  [!!] a daemon survived teardown: {state} — kill it manually before removing the package")
 
     print("  Services uninstalled")
     print()
@@ -2105,9 +2131,15 @@ def cmd_stop(args: argparse.Namespace) -> None:
         _launchd_bootout(_LAUNCHD_DB_LABEL)
         subprocess.run(["docker", "compose", "down"], cwd=_STACK_DIR, check=False)
     else:
-        for unit in ("agentibridge", "agentibridge-db"):
-            subprocess.run(["systemctl", "--user", "stop", unit], check=False)
-    print("AgentiBridge stopped. Start with: agentibridge install")
+        # Both backends, always — systemd may have been lost since install
+        # and a pidfile child would otherwise keep serving a port nothing
+        # points at.
+        _daemon.stop()
+        try:
+            subprocess.run(["systemctl", "--user", "stop", "agentibridge-db"], check=False)
+        except OSError:
+            pass
+    print("AgentiBridge stopped. Start with: agentibridge daemon start")
 
 
 def cmd_restart(args: argparse.Namespace) -> None:
@@ -2119,8 +2151,7 @@ def cmd_restart(args: argparse.Namespace) -> None:
             if plist_path.exists():
                 _launchd_bootstrap(plist_path)
     else:
-        subprocess.run(["systemctl", "--user", "restart", "agentibridge-db"], check=False)
-        subprocess.run(["systemctl", "--user", "restart", "agentibridge"], check=False)
+        _daemon.ensure_running(restart=True)
     print("AgentiBridge restarted.")
 
 
@@ -2230,6 +2261,12 @@ def main() -> None:
     tunnel_parser = subparsers.add_parser("tunnel", help="Cloudflare Tunnel status and named tunnel setup")
     tunnel_parser.add_argument("action", nargs="?", default="status", choices=["status", "setup"])
 
+    # daemon
+    daemon_parser = subparsers.add_parser(
+        "daemon", help="Daemon lifecycle: start/stop/restart/status (systemd or pidfile backend)"
+    )
+    daemon_parser.add_argument("action", nargs="?", default="status", choices=["start", "stop", "restart", "status"])
+
     # config
     config_parser = subparsers.add_parser("config", help="Show current config or generate .env template")
     config_parser.add_argument("--generate-env", action="store_true", help="Print .env template")
@@ -2291,6 +2328,7 @@ def main() -> None:
         "help": cmd_help,
         "connect": cmd_connect,
         "tunnel": cmd_tunnel,
+        "daemon": cmd_daemon,
         "config": cmd_config,
         "serve": cmd_serve,
         "install": cmd_install,

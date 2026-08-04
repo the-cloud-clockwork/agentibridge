@@ -1105,6 +1105,7 @@ class TestCmdInstall:
             patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
             patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
             patch("agentibridge.cli.install_claude_assets"),
+            patch("agentibridge.cli._daemon") as mock_daemon,
             patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
         ):
             cmd_install(MagicMock())
@@ -1113,6 +1114,8 @@ class TestCmdInstall:
         assert not any(call[0] == "launchctl" for call in calls)
         assert ["systemctl", "--user", "daemon-reload"] in calls
         assert (tmp_path / "LaunchAgents").exists() is False
+        # install converges the process, not just the config
+        assert mock_daemon.ensure_running.call_args.kwargs["restart"] is True
 
     def test_no_systemd_still_registers_claude_assets(self, tmp_path):
         """WSL2 without systemd: unit install is skipped, but the MCP client
@@ -1128,6 +1131,7 @@ class TestCmdInstall:
             patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
             patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
             patch("agentibridge.cli.install_claude_assets") as mock_assets,
+            patch("agentibridge.cli._daemon") as mock_daemon,
             patch("agentibridge.cli.subprocess.run", side_effect=_run),
         ):
             cmd_install(MagicMock(transport="stdio"))
@@ -1135,6 +1139,8 @@ class TestCmdInstall:
         mock_assets.assert_called_once_with("stdio")
         systemd_dir = tmp_path / ".config" / "systemd" / "user"
         assert not (systemd_dir / "agentibridge.service").exists()
+        # even without systemd the pidfile backend converges the daemon
+        assert mock_daemon.ensure_running.call_args.kwargs["restart"] is True
 
     def test_sse_transport_passed_and_env_updated(self, tmp_path):
         """--transport sse reaches install_claude_assets and flips the env
@@ -1147,6 +1153,7 @@ class TestCmdInstall:
             patch("agentibridge.cli._STACK_DIR", stack_dir),
             patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
             patch("agentibridge.cli.install_claude_assets") as mock_assets,
+            patch("agentibridge.cli._daemon"),
             patch("agentibridge.cli.subprocess.run", return_value=_ok()),
         ):
             cmd_install(MagicMock(transport="sse"))
@@ -1197,21 +1204,36 @@ class TestCmdUninstall:
         bootout_calls = [c[0][0] for c in mock_run.call_args_list if c[0][0][:2] == ["launchctl", "bootout"]]
         assert len(bootout_calls) == 2
 
+    def test_linux_stops_daemon_and_verifies(self, tmp_path):
+        """Linux uninstall stops both backends first and verifies teardown."""
+        with (
+            patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli.uninstall_claude_assets"),
+            patch("agentibridge.cli._daemon") as mock_daemon,
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
+        ):
+            mock_daemon.status.return_value = {"pidfile_alive": False, "port_open": False}
+            cmd_uninstall(MagicMock())
+
+        mock_daemon.stop.assert_called_once_with()
+        mock_daemon.status.assert_called_once_with()
+
 
 @pytest.mark.unit
 class TestCmdStop:
     """Tests for cmd_stop() command."""
 
-    def test_stops_systemd_services(self):
-        """Calls systemctl stop for both services."""
+    def test_stops_daemon_both_backends_and_db_unit(self):
+        """Linux stop delegates to daemon.stop() (both backends) + db unit."""
         with (
             patch("agentibridge.cli.platform.system", return_value="Linux"),
+            patch("agentibridge.cli._daemon") as mock_daemon,
             patch("agentibridge.cli.subprocess.run") as mock_run,
         ):
             cmd_stop(MagicMock())
 
+        mock_daemon.stop.assert_called_once_with()
         calls = [c[0][0] for c in mock_run.call_args_list]
-        assert ["systemctl", "--user", "stop", "agentibridge"] in calls
         assert ["systemctl", "--user", "stop", "agentibridge-db"] in calls
 
     def test_stops_launchd_agents_on_darwin(self, tmp_path):
@@ -1234,16 +1256,17 @@ class TestCmdStop:
 class TestCmdRestart:
     """Tests for cmd_restart() command."""
 
-    def test_restarts_systemd_services(self):
+    def test_restarts_via_daemon_convergence(self):
+        """Linux restart is daemon.ensure_running(restart=True) — converge
+        the process, not just poke systemd units."""
         with (
             patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
+            patch("agentibridge.cli._daemon") as mock_daemon,
+            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
         ):
             cmd_restart(MagicMock())
 
-        calls = [c[0][0] for c in mock_run.call_args_list]
-        assert ["systemctl", "--user", "restart", "agentibridge-db"] in calls
-        assert ["systemctl", "--user", "restart", "agentibridge"] in calls
+        mock_daemon.ensure_running.assert_called_once_with(restart=True)
 
     def test_darwin_boots_out_and_reloads_both_agents(self, tmp_path):
         """Darwin branch boots out both labels, then reloads whichever plists exist."""
