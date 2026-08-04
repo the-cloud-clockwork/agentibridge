@@ -104,6 +104,15 @@ class TestTransportSwitching:
         assert entry["type"] == "sse"
         assert "command" not in entry
 
+    def test_uninstall_removes_entry_regardless_of_shape(self, claude_json):
+        """Uninstall sweeps the union of both templates' names — the entry
+        goes away whether the last install registered stdio or sse."""
+        for transport in ("stdio", "sse"):
+            claude_assets._install_mcp(transport)
+            claude_assets._uninstall_mcp()
+            servers = json.loads(claude_json.read_text())["mcpServers"]
+            assert "agentibridge-mcp" not in servers
+
     def test_foreign_servers_untouched(self, claude_json):
         claude_json.write_text(json.dumps({"mcpServers": {"other": {"type": "sse", "url": "http://localhost:1/sse"}}}))
 

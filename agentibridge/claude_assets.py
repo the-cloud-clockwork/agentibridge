@@ -236,17 +236,23 @@ def _install_mcp(transport: str = "stdio") -> None:
 
 
 def _uninstall_mcp() -> None:
-    """Remove the server names declared in package/.mcp.json from ~/.claude.json."""
-    src = PACKAGE_DIR / ".mcp.json"
-    if not src.exists():
-        return
-    try:
-        config = json.loads(src.read_text())
-    except json.JSONDecodeError:
-        return
-    servers = config.get("mcpServers", {})
-    if servers:
-        _remove_mcp_from_user_scope(list(servers.keys()))
+    """Remove every server name declared in ANY package MCP template from ~/.claude.json.
+
+    Sweeping the union of both templates keeps uninstall correct regardless
+    of which transport the last install registered.
+    """
+    names: set[str] = set()
+    for template in _MCP_TEMPLATES.values():
+        src = PACKAGE_DIR / template
+        if not src.exists():
+            continue
+        try:
+            config = json.loads(src.read_text())
+        except json.JSONDecodeError:
+            continue
+        names.update(config.get("mcpServers", {}))
+    if names:
+        _remove_mcp_from_user_scope(sorted(names))
 
 
 def install_claude_assets(transport: str = "stdio") -> None:

@@ -1053,6 +1053,30 @@ def _install_launchd_db_agent(compose_file: Path) -> None:
         print(f"  {_LAUNCHD_DB_LABEL}: load failed — check launchctl print gui/{os.getuid()}/{_LAUNCHD_DB_LABEL}")
 
 
+def _read_env_var(env_file: Path, key: str) -> str:
+    """Read one ``KEY=value`` line from ``env_file`` (last occurrence wins)."""
+    value = ""
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith(f"{key}="):
+                value = stripped.split("=", 1)[1].strip()
+    return value
+
+
+def _set_env_var(env_file: Path, key: str, value: str) -> bool:
+    """Set ``KEY=value`` in ``env_file`` in place. Returns True if changed."""
+    env_text = env_file.read_text()
+    if re.search(rf"^{key}=", env_text, flags=re.MULTILINE):
+        new_text = re.sub(rf"^{key}=.*$", f"{key}={value}", env_text, flags=re.MULTILINE)
+    else:
+        new_text = env_text.rstrip("\n") + f"\n{key}={value}\n"
+    if new_text == env_text:
+        return False
+    env_file.write_text(new_text)
+    return True
+
+
 def _systemd_user_available() -> bool:
     """True when a user systemd session is reachable (False on e.g. WSL2 without systemd)."""
     try:
@@ -1219,22 +1243,22 @@ def cmd_install(args: argparse.Namespace) -> None:
         _print_pidfile_backend_note()
     print()
 
-    transport = getattr(args, "transport", "stdio")
+    # Idempotent re-install: without an explicit --transport, keep whatever
+    # the previous install chose (recorded as AGENTIBRIDGE_MCP_REGISTRATION,
+    # distinct from AGENTIBRIDGE_TRANSPORT which is the daemon's serve mode)
+    # — a habitual plain `agentibridge install` must not silently downgrade
+    # an sse registration back to the stdio shape enterprise policies drop.
+    transport = getattr(args, "transport", None)
+    if transport is None:
+        recorded = _read_env_var(env_file, "AGENTIBRIDGE_MCP_REGISTRATION")
+        transport = "sse" if recorded == "sse" else "stdio"
+        print(f"  Registration transport: {transport} (kept from agentibridge.env; override with --transport)")
+    if env_file.exists():
+        _set_env_var(env_file, "AGENTIBRIDGE_MCP_REGISTRATION", transport)
     if transport == "sse" and env_file.exists():
         # Keep the env file's transport in agreement with the registered
         # url entry so a manual start serves what the client expects.
-        env_text = env_file.read_text()
-        if re.search(r"^AGENTIBRIDGE_TRANSPORT=", env_text, flags=re.MULTILINE):
-            new_text = re.sub(
-                r"^AGENTIBRIDGE_TRANSPORT=.*$",
-                "AGENTIBRIDGE_TRANSPORT=sse",
-                env_text,
-                flags=re.MULTILINE,
-            )
-        else:
-            new_text = env_text.rstrip("\n") + "\nAGENTIBRIDGE_TRANSPORT=sse\n"
-        if new_text != env_text:
-            env_file.write_text(new_text)
+        if _set_env_var(env_file, "AGENTIBRIDGE_TRANSPORT", "sse"):
             print("  Set AGENTIBRIDGE_TRANSPORT=sse in agentibridge.env")
 
     try:
@@ -2281,7 +2305,7 @@ def main() -> None:
     install_parser.add_argument(
         "--transport",
         choices=["stdio", "sse"],
-        default="stdio",
+        default=None,
         help=(
             "MCP client registration mode written to ~/.claude.json: "
             "stdio (default, Claude Code spawns the server per session) or "
