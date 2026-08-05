@@ -2,11 +2,11 @@
 
 You are connected to **agentibridge** — an MCP server that indexes Claude Code
 transcripts across all projects and exposes them as tools. The server registers
-under the name `agentibridge-mcp` (or whatever the local install configured);
-tool names are namespaced as `mcp__<server>__<tool>`.
+under the name `agentibridge`, so tool names are namespaced
+`mcp__agentibridge__<tool>`.
 
 > **Availability disclaimer.** The tools below exist **only if the agentibridge
-> MCP is available** — i.e. you can see `mcp__agentibridge*` tools in this
+> MCP is available** — i.e. you can see `mcp__agentibridge__*` tools in this
 > session. If those tools are **not** visible, the MCP is not available (the
 > server isn't running or isn't registered); the table below does not apply and
 > nothing here is callable. Suggest `agentibridge status` to the operator.
@@ -74,5 +74,5 @@ tool names are namespaced as `mcp__<server>__<tool>`.
 - The operator asks "what agents are available" or wants to route work to a
   capability → `find_agents` / `discover_local_agents` / `dispatch_to_agent`.
 
-If `mcp__agentibridge*` tools are not visible, the server isn't running —
+If `mcp__agentibridge__*` tools are not visible, the server isn't running —
 suggest `agentibridge status` to the operator.

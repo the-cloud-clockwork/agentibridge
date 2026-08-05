@@ -199,6 +199,11 @@ _MCP_TEMPLATES = {
     "sse": ".mcp.sse.json",
 }
 
+# Registration names shipped before the rename to bare `agentibridge`. Swept
+# from ~/.claude.json on install and uninstall so an upgraded install never
+# leaves a second copy of the same tool set loaded.
+_LEGACY_MCP_NAMES = ("agentibridge-mcp", "agentibridge-local")
+
 
 def _load_mcp_template(transport: str = "stdio") -> dict:
     """Load and substitute placeholders in the package MCP template for ``transport``.
@@ -232,6 +237,7 @@ def _install_mcp(transport: str = "stdio") -> None:
                 if "url" in server:
                     server["headers"] = {"X-API-Key": first_key}
     if servers:
+        _remove_mcp_from_user_scope([n for n in _LEGACY_MCP_NAMES if n not in servers])
         _merge_mcp_to_user_scope(servers)
 
 
@@ -239,9 +245,10 @@ def _uninstall_mcp() -> None:
     """Remove every server name declared in ANY package MCP template from ~/.claude.json.
 
     Sweeping the union of both templates keeps uninstall correct regardless
-    of which transport the last install registered.
+    of which transport the last install registered. Pre-rename names go too,
+    so an install predating bare ``agentibridge`` uninstalls cleanly.
     """
-    names: set[str] = set()
+    names: set[str] = set(_LEGACY_MCP_NAMES)
     for template in _MCP_TEMPLATES.values():
         src = PACKAGE_DIR / template
         if not src.exists():

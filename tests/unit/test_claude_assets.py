@@ -43,7 +43,7 @@ class TestInstallMcpStdio:
         claude_assets._install_mcp()
 
         servers = json.loads(claude_json.read_text())["mcpServers"]
-        entry = servers["agentibridge-mcp"]
+        entry = servers["agentibridge"]
         assert entry["type"] == "stdio"
         assert entry["args"] == ["serve", "--stdio"]
         assert "url" not in entry
@@ -57,7 +57,7 @@ class TestInstallMcpSse:
         claude_assets._install_mcp("sse")
 
         servers = json.loads(claude_json.read_text())["mcpServers"]
-        entry = servers["agentibridge-mcp"]
+        entry = servers["agentibridge"]
         assert entry["type"] == "sse"
         assert entry["url"] == "http://localhost:8100/sse"
         assert "127.0.0.1" not in entry["url"]
@@ -69,7 +69,7 @@ class TestInstallMcpSse:
 
         claude_assets._install_mcp("sse")
 
-        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge-mcp"]
+        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge"]
         assert entry["url"] == "http://localhost:9200/sse"
 
     def test_sse_api_key_header(self, claude_json):
@@ -78,13 +78,13 @@ class TestInstallMcpSse:
 
         claude_assets._install_mcp("sse")
 
-        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge-mcp"]
+        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge"]
         assert entry["headers"] == {"X-API-Key": "first-key"}
 
     def test_sse_no_keys_no_headers(self, claude_json):
         claude_assets._install_mcp("sse")
 
-        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge-mcp"]
+        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge"]
         assert "headers" not in entry
 
 
@@ -95,12 +95,12 @@ class TestTransportSwitching:
         replace the entry, never strand the old shape."""
         claude_assets._install_mcp("sse")
         claude_assets._install_mcp("stdio")
-        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge-mcp"]
+        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge"]
         assert entry["type"] == "stdio"
         assert "url" not in entry
 
         claude_assets._install_mcp("sse")
-        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge-mcp"]
+        entry = json.loads(claude_json.read_text())["mcpServers"]["agentibridge"]
         assert entry["type"] == "sse"
         assert "command" not in entry
 
@@ -111,7 +111,7 @@ class TestTransportSwitching:
             claude_assets._install_mcp(transport)
             claude_assets._uninstall_mcp()
             servers = json.loads(claude_json.read_text())["mcpServers"]
-            assert "agentibridge-mcp" not in servers
+            assert "agentibridge" not in servers
 
     def test_foreign_servers_untouched(self, claude_json):
         claude_json.write_text(json.dumps({"mcpServers": {"other": {"type": "sse", "url": "http://localhost:1/sse"}}}))
@@ -120,4 +120,56 @@ class TestTransportSwitching:
 
         servers = json.loads(claude_json.read_text())["mcpServers"]
         assert "other" in servers
-        assert "agentibridge-mcp" in servers
+        assert "agentibridge" in servers
+
+
+def _seed_legacy(claude_json, name):
+    claude_json.write_text(json.dumps({"mcpServers": {name: {"type": "stdio", "command": "legacy"}}}))
+
+
+@pytest.mark.unit
+class TestLegacyNameMigration:
+    """Installs predating the rename registered under a different server name.
+    Leaving one behind loads the same 33 tools twice, so install sweeps them."""
+
+    @pytest.mark.parametrize("legacy", claude_assets._LEGACY_MCP_NAMES)
+    def test_install_replaces_legacy_entry(self, claude_json, legacy):
+        _seed_legacy(claude_json, legacy)
+
+        claude_assets._install_mcp()
+
+        servers = json.loads(claude_json.read_text())["mcpServers"]
+        assert legacy not in servers
+        assert servers["agentibridge"]["type"] == "stdio"
+        assert servers["agentibridge"]["args"] == ["serve", "--stdio"]
+
+    @pytest.mark.parametrize("legacy", claude_assets._LEGACY_MCP_NAMES)
+    def test_uninstall_clears_legacy_entry(self, claude_json, legacy):
+        """A pre-rename install never wrote `agentibridge` — uninstall must
+        still clear it rather than stranding the old name forever."""
+        _seed_legacy(claude_json, legacy)
+
+        claude_assets._uninstall_mcp()
+
+        assert legacy not in json.loads(claude_json.read_text())["mcpServers"]
+
+    def test_legacy_sweep_spares_foreign_servers(self, claude_json):
+        claude_json.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "agentibridge-mcp": {"type": "stdio", "command": "legacy"},
+                        "agentibridge-development": {"type": "http", "url": "http://localhost:8100/mcp"},
+                        "other": {"type": "sse", "url": "http://localhost:1/sse"},
+                    }
+                }
+            )
+        )
+
+        claude_assets._install_mcp("sse")
+
+        servers = json.loads(claude_json.read_text())["mcpServers"]
+        assert "agentibridge-mcp" not in servers
+        assert "agentibridge-development" in servers
+        assert "other" in servers
+        assert servers["agentibridge"]["type"] == "sse"
