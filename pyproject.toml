@@ -61,9 +61,6 @@ include = ["agentibridge*"]
 agentibridge = [
     "data/*",
     "data/.*",
-    "package/CLAUDE.md",
-    "package/**/*",
-    "package/**/.*",
 ]
 
 [tool.pytest.ini_options]

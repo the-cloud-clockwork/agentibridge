@@ -16,21 +16,14 @@ AgentiBridge runs **natively on the host**; only Redis + Postgres run in Docker.
 
 ### `agentibridge install`
 
-Install the systemd user services (databases + native app), register the MCP
-entry in `~/.claude.json`, and converge the daemon onto the new config.
+Install the systemd user services (databases + native app) and converge the
+daemon onto the new config. It never writes to `~/.claude.json` or
+`~/.claude/` — MCP client registration is manual, see
+[Connecting Clients](../getting-started/connecting-clients.md).
 
 ```
-agentibridge install [--transport {stdio,sse}]
+agentibridge install
 ```
-
-| Flag | Description |
-|------|-------------|
-| `--transport stdio` | Register a stdio entry — Claude Code spawns the server per session (default on a fresh box) |
-| `--transport sse` | Register a url entry `http://localhost:<port>/sse` pointing at the shared daemon — required where an enterprise policy silently filters stdio MCP servers |
-
-The chosen shape is recorded as `AGENTIBRIDGE_MCP_REGISTRATION` in
-`~/.agentibridge/agentibridge.env`; a later plain `agentibridge install`
-**keeps** it, so re-installs never silently downgrade an sse registration.
 
 Install ends with an unconditional daemon restart (`ensure_running`) so the
 running process always matches the config just written. On machines without a
@@ -41,8 +34,8 @@ starts the daemon instead — see `agentibridge daemon` below.
 
 ### `agentibridge uninstall`
 
-Stop the daemon (both backends), remove the systemd units, deregister the MCP
-entry, and **verify** teardown — warning if any daemon process survived.
+Stop the daemon (both backends), remove the systemd units, and **verify**
+teardown — warning if any daemon process survived.
 Config files in `~/.agentibridge/` are not removed.
 
 ---
@@ -290,7 +283,7 @@ command exits with a descriptive error. These are checked in `~/.agentibridge/ag
 | `POSTGRES_USER` | Postgres username |
 | `POSTGRES_PASSWORD` | Postgres password |
 | `POSTGRES_DB` | Postgres database name |
-| `AGENTIBRIDGE_TRANSPORT` | Daemon serve mode (`sse` for the shared daemon; the MCP registration shape is tracked separately as `AGENTIBRIDGE_MCP_REGISTRATION`) |
+| `AGENTIBRIDGE_TRANSPORT` | Daemon serve mode (`sse` for the shared daemon) |
 | `AGENTIBRIDGE_PORT` | HTTP port for SSE transport (e.g. `8100`) |
 
 Generate a fully-annotated template:

@@ -33,7 +33,6 @@ import time
 from pathlib import Path
 
 from agentibridge import daemon as _daemon
-from agentibridge.claude_assets import install_claude_assets, uninstall_claude_assets
 
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -1053,30 +1052,6 @@ def _install_launchd_db_agent(compose_file: Path) -> None:
         print(f"  {_LAUNCHD_DB_LABEL}: load failed — check launchctl print gui/{os.getuid()}/{_LAUNCHD_DB_LABEL}")
 
 
-def _read_env_var(env_file: Path, key: str) -> str:
-    """Read one ``KEY=value`` line from ``env_file`` (last occurrence wins)."""
-    value = ""
-    if env_file.is_file():
-        for line in env_file.read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith(f"{key}="):
-                value = stripped.split("=", 1)[1].strip()
-    return value
-
-
-def _set_env_var(env_file: Path, key: str, value: str) -> bool:
-    """Set ``KEY=value`` in ``env_file`` in place. Returns True if changed."""
-    env_text = env_file.read_text()
-    if re.search(rf"^{key}=", env_text, flags=re.MULTILINE):
-        new_text = re.sub(rf"^{key}=.*$", f"{key}={value}", env_text, flags=re.MULTILINE)
-    else:
-        new_text = env_text.rstrip("\n") + f"\n{key}={value}\n"
-    if new_text == env_text:
-        return False
-    env_file.write_text(new_text)
-    return True
-
-
 def _systemd_user_available() -> bool:
     """True when a user systemd session is reachable (False on e.g. WSL2 without systemd)."""
     try:
@@ -1145,12 +1120,6 @@ def _install_systemd_units(stack_dir: Path, env_file: Path, python_bin: str) -> 
     )
     print(f"  Installed {svc_dest} (python: {python_bin})")
 
-    # Remove old bridge service if present
-    bridge_svc = systemd_dir / "agentibridge-bridge.service"
-    if bridge_svc.exists():
-        bridge_svc.unlink()
-        print(f"  Removed obsolete {bridge_svc}")
-
     # Enable and start
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     for unit in ["agentibridge-db", "agentibridge"]:
@@ -1176,15 +1145,14 @@ def cmd_install(args: argparse.Namespace) -> None:
         _launchd_bootout(_LAUNCHD_LABEL)
         _launchd_bootout(_LAUNCHD_DB_LABEL)
     else:
-        for unit in ("agentibridge", "agentibridge-bridge", "agentibridge-db"):
+        for unit in ("agentibridge", "agentibridge-db"):
             try:
                 subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
                 subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
             except OSError:
                 break  # no systemctl binary at all — nothing to stop
     # Stop old agentibridge container if running from previous install.
-    # Guarded: a missing docker/pkill binary must not abort the install —
-    # the MCP client registration below still has to run.
+    # Guarded: a missing docker/pkill binary must not abort the install.
     for cmd in (
         ["docker", "stop", "agentibridge"],
         ["docker", "rm", "agentibridge"],
@@ -1238,38 +1206,13 @@ def cmd_install(args: argparse.Namespace) -> None:
     elif _systemd_user_available():
         _install_systemd_units(stack_dir, env_file, python_bin)
     else:
-        # Client registration below must still run — a missing service
-        # manager is not a reason to leave the MCP entry unwritten.
         _print_pidfile_backend_note()
     print()
 
-    # Idempotent re-install: without an explicit --transport, keep whatever
-    # the previous install chose (recorded as AGENTIBRIDGE_MCP_REGISTRATION,
-    # distinct from AGENTIBRIDGE_TRANSPORT which is the daemon's serve mode)
-    # — a habitual plain `agentibridge install` must not silently downgrade
-    # an sse registration back to the stdio shape enterprise policies drop.
-    transport = getattr(args, "transport", None)
-    if transport is None:
-        recorded = _read_env_var(env_file, "AGENTIBRIDGE_MCP_REGISTRATION")
-        transport = "sse" if recorded == "sse" else "stdio"
-        print(f"  Registration transport: {transport} (kept from agentibridge.env; override with --transport)")
-    if env_file.exists():
-        _set_env_var(env_file, "AGENTIBRIDGE_MCP_REGISTRATION", transport)
-    if transport == "sse" and env_file.exists():
-        # Keep the env file's transport in agreement with the registered
-        # url entry so a manual start serves what the client expects.
-        if _set_env_var(env_file, "AGENTIBRIDGE_TRANSPORT", "sse"):
-            print("  Set AGENTIBRIDGE_TRANSPORT=sse in agentibridge.env")
-
-    try:
-        install_claude_assets(transport)
-    except Exception as exc:
-        print(f"  [!!] Claude asset install skipped: {exc}")
-
     if not is_darwin:
-        # Converge the PROCESS, not just the config: the url, the unit and
-        # the env file were just rewritten — unconditional restart is
-        # cheaper than change-detection, whose failure mode is silent.
+        # Converge the PROCESS, not just the config: the unit and the env
+        # file were just rewritten — unconditional restart is cheaper than
+        # change-detection, whose failure mode is silent.
         print()
         _daemon.ensure_running(restart=True, env_file=env_file, stack_dir=stack_dir)
 
@@ -1297,10 +1240,10 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
         # with the CLI removed has nothing left to manage it.
         _daemon.stop()
         systemd_dir = Path.home() / ".config" / "systemd" / "user"
-        for unit in ("agentibridge", "agentibridge-db", "agentibridge-bridge"):
+        for unit in ("agentibridge", "agentibridge-db"):
             try:
-                subprocess.run(["systemctl", "--user", "stop", unit], check=False)
-                subprocess.run(["systemctl", "--user", "disable", unit], check=False)
+                subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, check=False)
+                subprocess.run(["systemctl", "--user", "disable", unit], capture_output=True, check=False)
             except Exception:
                 pass
             svc = systemd_dir / f"{unit}.service"
@@ -1320,13 +1263,6 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
             print(f"  [!!] a daemon survived teardown: {state} — kill it manually before removing the package")
 
     print("  Services uninstalled")
-    print()
-
-    try:
-        uninstall_claude_assets()
-    except Exception as exc:
-        print(f"  [!!] Claude asset uninstall skipped: {exc}")
-
     print()
     print("Note: Config files in ~/.agentibridge/ were preserved.")
     print("Remove manually if no longer needed.")
@@ -2301,18 +2237,7 @@ def main() -> None:
     serve_group.add_argument("--stdio", action="store_true", help="Run in stdio mode (default — for Claude Code)")
     serve_group.add_argument("--sse", action="store_true", help="Run in SSE/HTTP mode")
 
-    install_parser = subparsers.add_parser("install", help="Install as systemd user service")
-    install_parser.add_argument(
-        "--transport",
-        choices=["stdio", "sse"],
-        default=None,
-        help=(
-            "MCP client registration mode written to ~/.claude.json: "
-            "stdio (default, Claude Code spawns the server per session) or "
-            "sse (url entry pointing at the shared daemon on http://localhost:<port>/sse; "
-            "use where org policy filters stdio MCP servers)"
-        ),
-    )
+    subparsers.add_parser("install", help="Install as systemd user service")
 
     # uninstall
     subparsers.add_parser("uninstall", help="Remove systemd service")

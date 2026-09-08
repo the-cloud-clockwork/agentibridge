@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "agentibridge": {
-      "type": "sse",
-      "url": "http://localhost:${PORT}/sse"
-    }
-  }
-}
