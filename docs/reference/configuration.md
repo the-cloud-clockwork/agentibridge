@@ -53,7 +53,6 @@ AgentiBridge has two run modes that can run simultaneously without conflict:
 | `AGENTIBRIDGE_HOST` | `localhost` | Bind address for SSE transport. Use `0.0.0.0` to accept connections from any interface (set `AGENTIBRIDGE_API_KEYS` too). Client urls must spell `localhost` — enterprise policies silently drop `127.0.0.1` urls |
 | `AGENTIBRIDGE_PORT` | `8100` | HTTP port for SSE transport |
 | `AGENTIBRIDGE_API_KEYS` | _(none)_ | Comma-separated list of API keys for authentication. Empty = no auth required |
-| `AGENTIBRIDGE_MCP_REGISTRATION` | _(written by install)_ | The MCP registration shape (`stdio` or `sse`) recorded by the last `agentibridge install`. A plain re-install keeps it, so an sse registration never silently downgrades. Set via `install --transport`, not by hand |
 | `AGENTIBRIDGE_MCP_SUPERVISOR` | _(auto)_ | Force the daemon backend: `systemd` or `pidfile`. Unset = auto-detect via `systemctl --user show-environment` |
 
 ### Collector Configuration

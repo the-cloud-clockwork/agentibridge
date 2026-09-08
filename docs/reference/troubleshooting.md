@@ -120,7 +120,7 @@ all** for it, and `claude mcp get <name>` answers `No MCP server named
 Code Enterprise policies (organisation OAuth tokens) filter entries silently:
 
 1. **stdio entries are dropped.** Re-register as a url entry:
-   `agentibridge install --transport sse`.
+   `claude mcp add --scope user --transport sse agentibridge http://localhost:8100/sse`.
 2. **`127.0.0.1` urls are dropped.** The identical url spelled `localhost`
    is accepted. Check the `url` field's host spelling.
 

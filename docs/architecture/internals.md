@@ -32,7 +32,6 @@ This document provides a deep dive into AgentiBridge's internal modules and impl
 | `registry.py` | A2A agent registry: register/heartbeat/route (Phase 6) | `AgentRecord`, `register_agent()`, `list_agents()`, `route_to_agent()`, `route_by_capability()` |
 | `local_agents.py` | Session-gated local agent discovery (Phase 6) | `discover_local_agents()`, `get_local_agent()`, `read_package_manifest()` |
 | `plans.py` | Plan-then-execute dispatch workflow | `submit_plan()`, `execute_plan()`, `list_plans()`, `get_plan_status()` |
-| `claude_assets.py` | Installs bundled skills/commands/agents/rules into `~/.claude/` | `install_claude_assets()`, `uninstall_claude_assets()` |
 
 ## Redis + File Fallback Pattern
 

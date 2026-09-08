@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-09-08
+
+### Removed
+
+- **`install`/`uninstall` no longer touch the Claude Code home.** The bundled
+  asset installer (`claude_assets`) is gone with everything it wrote: the
+  fenced `agentibridge` block in `~/.claude/CLAUDE.md`, the symlinked
+  `package/{skills,commands,agents,rules}` (including the `session-handoff`
+  skill), and the MCP server entry in `~/.claude.json`. Register the MCP
+  server yourself — `claude mcp add --scope user --transport sse agentibridge
+  http://localhost:8100/sse`.
+- **`install --transport` and `AGENTIBRIDGE_MCP_REGISTRATION`** — they only
+  shaped the registration that is no longer written. `AGENTIBRIDGE_TRANSPORT`
+  still selects the daemon's serve mode.
+- Legacy `agentibridge-bridge.service` handling — the unit has not been
+  installed since the native migration, and its stop/disable calls were the
+  "Unit ... not loaded" noise on every uninstall.
+
 ## [0.10.0] - 2026-08-05
 
 ### Changed

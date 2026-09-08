@@ -83,7 +83,6 @@ REDIS_URL=redis://localhost:6379/0
 REDIS_KEY_PREFIX=agentibridge
 AGENTIBRIDGE_TRANSPORT=sse
 AGENTIBRIDGE_HOST=localhost         # bind + client-url host; spell localhost, not 127.0.0.1
-AGENTIBRIDGE_MCP_REGISTRATION=      # stdio|sse — registration shape recorded by `install --transport`; plain install keeps it
 AGENTIBRIDGE_MCP_SUPERVISOR=        # systemd|pidfile — force daemon backend; empty = auto-detect user systemd bus
 AGENTIBRIDGE_PORT=8100
 AGENTIBRIDGE_API_KEYS=              # comma-separated, empty = no auth

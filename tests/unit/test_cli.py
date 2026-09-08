@@ -1073,7 +1073,6 @@ class TestCmdInstall:
             patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
             patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", tmp_path / "LaunchAgents"),
             patch("agentibridge.cli._LAUNCHD_LOG_DIR", tmp_path / "Logs"),
-            patch("agentibridge.cli.install_claude_assets"),
             patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
         ):
             cmd_install(MagicMock())
@@ -1104,7 +1103,6 @@ class TestCmdInstall:
             patch("agentibridge.cli.platform.system", return_value="Linux"),
             patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
             patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli.install_claude_assets"),
             patch("agentibridge.cli._daemon") as mock_daemon,
             patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
         ):
@@ -1116,118 +1114,6 @@ class TestCmdInstall:
         assert (tmp_path / "LaunchAgents").exists() is False
         # install converges the process, not just the config
         assert mock_daemon.ensure_running.call_args.kwargs["restart"] is True
-
-    def test_no_systemd_still_registers_claude_assets(self, tmp_path):
-        """WSL2 without systemd: unit install is skipped, but the MCP client
-        registration (install_claude_assets) must still run."""
-
-        def _run(cmd, *a, **kw):
-            if cmd[:2] == ["systemctl", "--user"]:
-                raise FileNotFoundError("systemctl")
-            return _ok()
-
-        with (
-            patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli._STACK_DIR", tmp_path / "stack"),
-            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli.install_claude_assets") as mock_assets,
-            patch("agentibridge.cli._daemon") as mock_daemon,
-            patch("agentibridge.cli.subprocess.run", side_effect=_run),
-        ):
-            cmd_install(MagicMock(transport="stdio"))
-
-        mock_assets.assert_called_once_with("stdio")
-        systemd_dir = tmp_path / ".config" / "systemd" / "user"
-        assert not (systemd_dir / "agentibridge.service").exists()
-        # even without systemd the pidfile backend converges the daemon
-        assert mock_daemon.ensure_running.call_args.kwargs["restart"] is True
-
-    def test_sse_transport_passed_and_env_updated(self, tmp_path):
-        """--transport sse reaches install_claude_assets and flips the env
-        file's AGENTIBRIDGE_TRANSPORT so a manual start serves what the
-        registered url entry expects."""
-        stack_dir = tmp_path / "stack"
-
-        with (
-            patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli._STACK_DIR", stack_dir),
-            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli.install_claude_assets") as mock_assets,
-            patch("agentibridge.cli._daemon"),
-            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
-        ):
-            cmd_install(MagicMock(transport="sse"))
-
-        mock_assets.assert_called_once_with("sse")
-        env_file = stack_dir / "agentibridge.env"
-        if env_file.exists():
-            assert "AGENTIBRIDGE_TRANSPORT=sse" in env_file.read_text()
-
-    def test_sse_then_plain_round_trip(self, tmp_path):
-        """Explicit --transport sse RECORDS the choice; a following plain
-        install READS it back and stays sse — the full write→read loop."""
-        stack_dir = tmp_path / "stack"
-
-        common = lambda: (  # noqa: E731
-            patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli._STACK_DIR", stack_dir),
-            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli._daemon"),
-            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
-        )
-
-        with patch("agentibridge.cli.install_claude_assets") as mock_assets:
-            ctxs = common()
-            with ctxs[0], ctxs[1], ctxs[2], ctxs[3], ctxs[4]:
-                cmd_install(MagicMock(transport="sse"))
-        mock_assets.assert_called_once_with("sse")
-        env_file = stack_dir / "agentibridge.env"
-        assert "AGENTIBRIDGE_MCP_REGISTRATION=sse" in env_file.read_text()
-
-        with patch("agentibridge.cli.install_claude_assets") as mock_assets:
-            ctxs = common()
-            with ctxs[0], ctxs[1], ctxs[2], ctxs[3], ctxs[4]:
-                cmd_install(MagicMock(transport=None))
-        mock_assets.assert_called_once_with("sse")
-
-    def test_plain_reinstall_keeps_sse_registration(self, tmp_path):
-        """No --transport on a box whose env file records sse: the sse
-        registration is kept — a habitual plain install must not silently
-        downgrade to the stdio shape enterprise policies drop."""
-        import agentibridge.cli as cli_mod
-
-        stack_dir = tmp_path / "stack"
-        stack_dir.mkdir(parents=True)
-        example = (cli_mod.DATA_DIR / "agentibridge.env.example").read_text()
-        (stack_dir / "agentibridge.env").write_text(example + "\nAGENTIBRIDGE_MCP_REGISTRATION=sse\n")
-
-        with (
-            patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli._STACK_DIR", stack_dir),
-            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli.install_claude_assets") as mock_assets,
-            patch("agentibridge.cli._daemon"),
-            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
-        ):
-            cmd_install(MagicMock(transport=None))
-
-        mock_assets.assert_called_once_with("sse")
-
-    def test_plain_install_fresh_box_defaults_stdio(self, tmp_path):
-        """No --transport and no recorded choice → stdio, the safe default."""
-        stack_dir = tmp_path / "stack"
-
-        with (
-            patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli._STACK_DIR", stack_dir),
-            patch("agentibridge.cli._LEGACY_STACK_DIR", tmp_path / "legacy"),
-            patch("agentibridge.cli.install_claude_assets") as mock_assets,
-            patch("agentibridge.cli._daemon"),
-            patch("agentibridge.cli.subprocess.run", return_value=_ok()),
-        ):
-            cmd_install(MagicMock(transport=None))
-
-        assert mock_assets.call_args[0][0] == "stdio"
 
 
 @pytest.mark.unit
@@ -1245,7 +1131,6 @@ class TestCmdUninstall:
         with (
             patch("agentibridge.cli.platform.system", return_value="Darwin"),
             patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
-            patch("agentibridge.cli.uninstall_claude_assets"),
             patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
         ):
             cmd_uninstall(MagicMock())
@@ -1262,7 +1147,6 @@ class TestCmdUninstall:
         with (
             patch("agentibridge.cli.platform.system", return_value="Darwin"),
             patch("agentibridge.cli._LAUNCHD_AGENTS_DIR", agents_dir),
-            patch("agentibridge.cli.uninstall_claude_assets"),
             patch("agentibridge.cli.subprocess.run", return_value=_ok()) as mock_run,
         ):
             cmd_uninstall(MagicMock())
@@ -1274,7 +1158,6 @@ class TestCmdUninstall:
         """Linux uninstall stops both backends first and verifies teardown."""
         with (
             patch("agentibridge.cli.platform.system", return_value="Linux"),
-            patch("agentibridge.cli.uninstall_claude_assets"),
             patch("agentibridge.cli._daemon") as mock_daemon,
             patch("agentibridge.cli.subprocess.run", return_value=_ok()),
         ):
