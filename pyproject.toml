@@ -21,6 +21,7 @@ requires-python = ">=3.11"
 dependencies = [
     "anyio>=4.0",
     "fastmcp>=2.0",
+    "mcp>=1,<2",
     "redis>=7.0",
     "uvicorn[standard]>=0.30",
     "httpx>=0.25",
