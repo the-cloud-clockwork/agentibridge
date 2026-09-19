@@ -22,6 +22,7 @@ WORKDIR /app
 # Install Python dependencies (pinned to what agentibridge actually needs)
 RUN pip install --no-cache-dir \
     "fastmcp>=2.0" \
+    "mcp>=1,<2" \
     "redis>=7.0" \
     "uvicorn[standard]>=0.30" \
     "httpx>=0.25" \
