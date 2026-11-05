@@ -160,8 +160,10 @@ AGENTIHUB_DIR = os.getenv("AGENTIHUB_DIR", "")
 # online only if a claude session in its dir was active within this window.
 AGENTIBRIDGE_LOCAL_SESSION_TTL = _env_int("AGENTIBRIDGE_LOCAL_SESSION_TTL", "3600", min_val=1)
 
-AGENTIBRIDGE_MASTER_DIR = os.getenv("AGENTIBRIDGE_MASTER_DIR", str(Path.home() / "dev" / "tcc-ecosystem"))
+AGENTIBRIDGE_MASTER_DIR = os.getenv("AGENTIBRIDGE_MASTER_DIR") or str(Path.home() / "dev" / "tcc-ecosystem")
 
-AGENTIHOOKS_BINARY = os.getenv(
-    "AGENTIHOOKS_BINARY", shutil.which("agentihooks") or str(Path.home() / ".local" / "bin" / "agentihooks")
+AGENTIHOOKS_BINARY = (
+    os.getenv("AGENTIHOOKS_BINARY")
+    or shutil.which("agentihooks")
+    or str(Path.home() / ".local" / "bin" / "agentihooks")
 )

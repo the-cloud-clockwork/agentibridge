@@ -139,7 +139,7 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 | `AGENTIBRIDGE_MASTER_DIR` | `~/dev/tcc-ecosystem` | Directory `init-interactive-agent` opens master agents in |
 | `AGENTIHOOKS_BINARY` | `agentihooks` on `PATH`, else `~/.local/bin/agentihooks` | The agentihooks CLI that runs `init-agent` |
 
-**What a master agent is.** `init-interactive-agent` runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR --name <name> -- --route claude-ai --remote-control <name>`: a herdr tab with an interactive Claude Code session on a stored claude.ai login, reachable from claude.ai/code through Remote Control. The tool succeeds only when init-agent reports `route_status=routed`.
+**What a master agent is.** `init-interactive-agent` runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR --name <name> -- --route claude-ai --remote-control <name>`: a herdr tab with an interactive Claude Code session on a stored claude.ai login, reachable from claude.ai/code through Remote Control. The tool succeeds only when init-agent reports `route_status=routed`. A launch that times out (300 s) reports failure even when its herdr tab already opened; check herdr before retrying.
 
 ### Logging Configuration
 

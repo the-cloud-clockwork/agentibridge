@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,7 +14,7 @@ import agentibridge.master_agents as ma
 ROUTED = "host=herdr\nname=master-1\nstatus=started\nroute_status=routed\naccount=acct-a\npane_id=p-1\n"
 
 
-def _done(returncode: int, stdout: str, stderr: str = "") -> subprocess.CompletedProcess:
+def _done(returncode: int, stdout: str, stderr: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(["agentihooks"], returncode, stdout, stderr)
 
 
@@ -64,6 +65,12 @@ class TestLaunchEnvironment:
         assert "ANTHROPIC_BASE_URL" not in env
         assert env["PATH"] == "/opt/hooks/bin:/usr/bin"
 
+    def test_bare_binary_adds_nothing_to_path(self, paths: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ma, "AGENTIHOOKS_BINARY", "agentihooks")
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        assert ma.launch_environment()["PATH"] == "/usr/bin"
+
 
 @pytest.mark.unit
 class TestLaunchMaster:
@@ -96,6 +103,12 @@ class TestLaunchMaster:
         assert result["success"] is False
         assert result["error"] == "agentihooks init-agent: herdr is down"
 
+    def test_silent_nonzero_exit_reports_the_exit_code(self, paths: None) -> None:
+        with patch.object(ma.subprocess, "run", return_value=_done(2, "")):
+            result = ma.launch_master("master-1")
+
+        assert result["error"] == "init-agent exited 2, route_status=none"
+
     def test_route_error_fails_the_launch(self, paths: None) -> None:
         refused = _done(0, "status=started\nroute_status=refused\nroute_error=no usable claude ai login\n")
         with patch.object(ma.subprocess, "run", return_value=refused):
@@ -109,7 +122,7 @@ class TestLaunchMaster:
             result = ma.launch_master("master-1")
 
         assert result["success"] is False
-        assert result["error"] == "route_status=pending"
+        assert result["error"] == "init-agent exited 0, route_status=pending"
 
     @pytest.mark.parametrize(
         "raised", [FileNotFoundError("agentihooks"), subprocess.TimeoutExpired("agentihooks", ma.LAUNCH_TIMEOUT_S)]
@@ -144,3 +157,28 @@ class TestInitInteractiveAgentTool:
 
         assert result == launched
         launch.assert_called_once_with("master-1", "hello")
+
+
+@pytest.mark.unit
+class TestMasterSettings:
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_unset_or_empty_settings_take_their_defaults(
+        self, monkeypatch: pytest.MonkeyPatch, value: str | None
+    ) -> None:
+        import importlib
+
+        import agentibridge.config as config
+
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        for key in ("AGENTIBRIDGE_MASTER_DIR", "AGENTIHOOKS_BINARY"):
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
+        importlib.reload(config)
+
+        assert config.AGENTIBRIDGE_MASTER_DIR == str(Path.home() / "dev" / "tcc-ecosystem")
+        assert config.AGENTIHOOKS_BINARY == str(Path.home() / ".local" / "bin" / "agentihooks")
+        monkeypatch.undo()
+        importlib.reload(config)

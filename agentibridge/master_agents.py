@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from agentibridge.config import AGENTIBRIDGE_MASTER_DIR, AGENTIHOOKS_BINARY
 
@@ -41,9 +42,11 @@ def launch_command(name: str, prompt: str) -> list[str]:
 
 
 def launch_environment() -> dict[str, str]:
-    """The bridge environment without Anthropic auth overrides, the agentihooks directory first on PATH."""
+    """The bridge environment without Anthropic auth overrides, an absolute agentihooks directory first on PATH."""
     env = {key: value for key, value in os.environ.items() if key not in STRIPPED_ENV}
-    env["PATH"] = os.pathsep.join(filter(None, [str(Path(AGENTIHOOKS_BINARY).parent), env.get("PATH", "")]))
+    parent = Path(AGENTIHOOKS_BINARY).parent
+    head = str(parent) if parent.is_absolute() else ""
+    env["PATH"] = os.pathsep.join(filter(None, [head, env.get("PATH", "")]))
     return env
 
 
@@ -53,7 +56,7 @@ def parse_report(output: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, found, value in pairs if found and key.strip()}
 
 
-def launch_master(name: str = "", prompt: str = "") -> dict:
+def launch_master(name: str = "", prompt: str = "") -> dict[str, Any]:
     """Open a master agent; success only once init-agent reports the session routed."""
     name = name or default_name()
     result = {"success": False, "name": name, "directory": AGENTIBRIDGE_MASTER_DIR}
@@ -72,5 +75,10 @@ def launch_master(name: str = "", prompt: str = "") -> dict:
     report = parse_report(done.stdout)
     if done.returncode == 0 and report.get("route_status") == "routed":
         return {**result, "success": True, "report": report}
-    reason = done.stderr.strip() or report.get("route_error") or f"route_status={report.get('route_status', 'none')}"
+    status = report.get("route_status", "none")
+    reason = (
+        done.stderr.strip()
+        or report.get("route_error")
+        or f"init-agent exited {done.returncode}, route_status={status}"
+    )
     return {**result, "report": report, "error": reason}
