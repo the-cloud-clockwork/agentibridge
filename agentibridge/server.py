@@ -1124,9 +1124,21 @@ async def init_interactive_agent(name: str = "", prompt: str = "") -> str:
     return json.dumps(result)
 
 
-def run_command_allowed(enabled: bool, provider: "BridgeOAuthProvider | None") -> bool:
-    """Serve run_command only when enabled and OAuth, if configured, requires Google sign-in."""
-    return enabled and (provider is None or bool(provider.google_client_id))
+def run_command_allowed(enabled: bool, provider: "BridgeOAuthProvider | None", callers_authenticated: bool) -> bool:
+    """Serve run_command only when enabled and every caller must authenticate.
+
+    With OAuth that means Google sign-in; without it, API keys on the HTTP transport or stdio.
+    """
+    if not enabled:
+        return False
+    if provider is not None:
+        return bool(provider.google_client_id)
+    return callers_authenticated
+
+
+def _callers_authenticated() -> bool:
+    """Whether a caller without OAuth must present an API key: stdio, or HTTP with keys set."""
+    return os.getenv("AGENTIBRIDGE_TRANSPORT", "stdio") != "sse" or bool(os.getenv("AGENTIBRIDGE_API_KEYS", "").strip())
 
 
 async def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S, cwd: str = "") -> str:
@@ -1135,7 +1147,7 @@ async def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIME
     return json.dumps(result)
 
 
-if run_command_allowed(AGENTIBRIDGE_RUN_COMMAND_ENABLED, _oauth_provider):
+if run_command_allowed(AGENTIBRIDGE_RUN_COMMAND_ENABLED, _oauth_provider, _callers_authenticated()):
     mcp.tool(description=describe(preflight()))(run_command)
 
 

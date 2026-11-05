@@ -419,22 +419,38 @@ class TestRemoveTools:
 @pytest.mark.unit
 class TestRunCommandGate:
     @pytest.mark.parametrize(
-        ("enabled", "provider", "served"),
+        ("enabled", "provider", "authenticated", "served"),
         [
-            (False, None, False),
-            (True, None, True),
-            (True, MagicMock(google_client_id=""), False),
-            (True, MagicMock(google_client_id="google-client"), True),
-            (False, MagicMock(google_client_id="google-client"), False),
+            (False, None, True, False),
+            (True, None, True, True),
+            (True, None, False, False),
+            (True, MagicMock(google_client_id=""), True, False),
+            (True, MagicMock(google_client_id="google-client"), False, True),
+            (False, MagicMock(google_client_id="google-client"), True, False),
         ],
-        ids=["disabled", "no-oauth", "auto-approved-oauth", "google-sign-in", "disabled-with-google"],
+        ids=["disabled", "api-keys", "open-http", "auto-approved-oauth", "google-sign-in", "disabled-with-google"],
     )
-    def test_served_only_when_enabled_and_never_with_auto_approved_oauth(
-        self, enabled: bool, provider: MagicMock | None, served: bool
+    def test_served_only_when_enabled_and_every_caller_authenticates(
+        self, enabled: bool, provider: MagicMock | None, authenticated: bool, served: bool
     ) -> None:
         from agentibridge.server import run_command_allowed
 
-        assert run_command_allowed(enabled, provider) is served
+        assert run_command_allowed(enabled, provider, authenticated) is served
+
+    @pytest.mark.parametrize(
+        ("transport", "keys", "authenticated"),
+        [("stdio", "", True), ("sse", "", False), ("sse", "key-1", True)],
+        ids=["stdio", "sse-open", "sse-keys"],
+    )
+    def test_callers_authenticate_on_stdio_or_with_api_keys(
+        self, monkeypatch: pytest.MonkeyPatch, transport: str, keys: str, authenticated: bool
+    ) -> None:
+        from agentibridge.server import _callers_authenticated
+
+        monkeypatch.setenv("AGENTIBRIDGE_TRANSPORT", transport)
+        monkeypatch.setenv("AGENTIBRIDGE_API_KEYS", keys)
+
+        assert _callers_authenticated() is authenticated
 
     def test_disabled_by_default(self) -> None:
         from agentibridge.server import mcp
