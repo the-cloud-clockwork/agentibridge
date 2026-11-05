@@ -17,6 +17,7 @@ OUTPUT_LIMIT = 65536
 DEFAULT_TIMEOUT_S = 60
 MAX_TIMEOUT_S = 600
 DRAIN_GRACE_S = 2.0
+WAIT_POLL_S = 0.02
 WSL_POWERSHELL = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
 ENV_KEYS = (
     "HOME",
@@ -109,11 +110,34 @@ def command_environment() -> dict[str, str]:
     return env
 
 
-def _drain(stream: io.BufferedIOBase, kept: bytearray, seen: list[int]) -> None:
+def _drain(stream: io.BufferedIOBase, kept: bytearray, seen: list[int], lock: threading.Lock) -> None:
     """Read ``stream`` to its end, keeping the first OUTPUT_LIMIT bytes and counting all of them."""
     for chunk in iter(lambda: stream.read1(OUTPUT_LIMIT), b""):
-        seen[0] += len(chunk)
-        kept += chunk[: max(0, OUTPUT_LIMIT - len(kept))]
+        with lock:
+            seen[0] += len(chunk)
+            kept += chunk[: max(0, OUTPUT_LIMIT - len(kept))]
+
+
+def _snapshot(kept: bytearray, seen: list[int], lock: threading.Lock) -> tuple[str, bool]:
+    """The captured text and whether it was cut, read while a lingering reader may still append."""
+    with lock:
+        return bytes(kept).decode("utf-8", errors="replace"), seen[0] > OUTPUT_LIMIT
+
+
+def _wait_unreaped(process: subprocess.Popen, timeout: float) -> bool:
+    """Wait up to ``timeout`` seconds for ``process`` to exit, unreaped so its process group id stays reserved."""
+    if not hasattr(os, "waitid"):
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+    deadline = time.monotonic() + timeout
+    while os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(WAIT_POLL_S)
+    return True
 
 
 def _kill_group(process: subprocess.Popen) -> None:
@@ -153,22 +177,20 @@ def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S,
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    outputs = {name: (bytearray(), [0]) for name in ("stdout", "stderr")}
+    outputs = {name: (bytearray(), [0], threading.Lock()) for name in ("stdout", "stderr")}
     readers = [
         threading.Thread(target=_drain, args=(stream, *outputs[name]), daemon=True)
         for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
     ]
     for reader in readers:
         reader.start()
-    timed_out = False
-    try:
-        process.wait(timeout=max(1, min(timeout, MAX_TIMEOUT_S)))
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    timed_out = not _wait_unreaped(process, max(1, min(timeout, MAX_TIMEOUT_S)))
     _kill_group(process)
     process.wait()
     for reader in readers:
         reader.join(DRAIN_GRACE_S)
+    stdout, stdout_cut = _snapshot(*outputs["stdout"])
+    stderr, stderr_cut = _snapshot(*outputs["stderr"])
     return {
         "success": process.returncode == 0 and not timed_out,
         "shell": chosen,
@@ -176,7 +198,7 @@ def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S,
         "exit_code": process.returncode,
         "timed_out": timed_out,
         "duration_ms": int((time.monotonic() - started) * 1000),
-        "stdout": bytes(outputs["stdout"][0]).decode("utf-8", errors="replace"),
-        "stderr": bytes(outputs["stderr"][0]).decode("utf-8", errors="replace"),
-        "truncated": any(seen[0] > OUTPUT_LIMIT for _, seen in outputs.values()),
+        "stdout": stdout,
+        "stderr": stderr,
+        "truncated": stdout_cut or stderr_cut,
     }
