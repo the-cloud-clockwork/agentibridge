@@ -792,7 +792,6 @@ print(json.dumps({"success": result["success"], "error": result.get("error", "")
         record("4.3", "restore_session — missing session", "fail", str(e)[:120])
         failed += 1
 
-    # Test: dispatch.py — module loads
     print("\n[4.4] dispatch module — import check")
     try:
         out = docker_exec("""

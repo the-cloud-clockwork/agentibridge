@@ -628,11 +628,6 @@ async def restore_session(
         return json.dumps({"success": False, "error": str(e)})
 
 
-# =============================================================================
-# PHASE 5 — KNOWLEDGE CATALOG (Memory, History)
-# =============================================================================
-
-
 @mcp.tool()
 def list_memory_files(project: str = "") -> str:
     """List all memory files across projects.

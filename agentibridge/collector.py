@@ -88,7 +88,6 @@ class SessionCollector:
         except Exception as e:
             log("Collector: scan error", {"error": str(e)})
 
-        # Phase 5: scan memory files and history
         memory_count = self._scan_memory_files()
         history_count = self._scan_history()
 

@@ -595,7 +595,6 @@ print(json.dumps({"success": result["success"], "error": result.get("error", "")
     print(f"  Error handled: {data['error'][:60]}")
     passed += 1
 
-    # Test: dispatch.py — module loads
     print("\n[4.4] dispatch module — import check")
     out = docker_exec("""
 import json
