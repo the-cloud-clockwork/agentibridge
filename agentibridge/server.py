@@ -8,7 +8,7 @@ for new data; all tools work with Redis or filesystem fallback.
 Usage:
     python -m agentibridge
 
-Available tools (17):
+Available tools (12 of 23 total — Phase 3/6 registry and recon tools omitted here):
     Phase 1 — Foundation:
     - list_sessions       — List sessions across all projects
     - get_session         — Get full session metadata + transcript
@@ -19,23 +19,17 @@ Available tools (17):
     Phase 2 — Semantic Search:
     - search_semantic     — Semantic search using embeddings
     - generate_summary    — Auto-generate session summary via LLM
-    Phase 4 — Write-back & Dispatch:
+    Phase 4 — Write-back:
     - restore_session     — Load session context for continuation
-    - dispatch_task       — Dispatch a task with optional session context
-    - get_dispatch_job    — Poll background job status
-    - list_dispatch_jobs  — List dispatch jobs with optional status filter
     Phase 5 — Knowledge Catalog:
     - list_memory_files   — List memory files across projects
     - get_memory_file     — Read a specific memory file
-    - list_plans          — List plans sorted by recency
-    - get_plan            — Read a plan by codename
     - search_history      — Search global prompt history
 """
 
 import json
 import os
 from functools import partial
-from pathlib import Path
 import sys
 from typing import Dict
 
@@ -430,8 +424,8 @@ async def agent_search(
         f"  {query}\n\n"
         "Use the MCP tools available to you (list_sessions, search_sessions, "
         "search_history, search_semantic, get_session, list_memory_files, "
-        "list_plans, plus Read/Glob/Grep) to find the most relevant sessions, "
-        "files, history entries, memory files, or plans that match the query. "
+        "plus Read/Glob/Grep) to find the most relevant sessions, "
+        "files, history entries, or memory files that match the query. "
         "Return ONLY a compact JSON object of the form:\n"
         '  {"success": true, "query": "<echo>", "count": N, '
         '"matches": [ {...relevant fields per hit...} ], '
@@ -620,324 +614,8 @@ async def restore_session(
         return json.dumps({"success": False, "error": str(e)})
 
 
-@mcp.tool()
-async def dispatch_task(
-    task_description: str,
-    project: str = "",
-    session_id: str = "",
-    resume_session_id: str = "",
-    command: str = "default",
-    context_turns: int = 10,
-) -> str:
-    """Dispatch a task to the agent as a background job (fire-and-forget).
-
-    Returns immediately with a job_id. Use get_dispatch_job(job_id) to
-    check status and retrieve output when the task completes.
-
-    Two ways to use a past session:
-    - session_id: load context from the session and inject it into a new prompt
-    - resume_session_id: actually resume the session thread via ``--resume``
-      (continues the existing conversation with full memory, no injection needed)
-
-    Args:
-        task_description: What the agent should do
-        project: Project context hint (optional). Can be a full path or fuzzy name (e.g. "agentibridge") — resolved to cwd for the spawned session
-        session_id: Past session to pull context from (optional)
-        resume_session_id: Session to resume via --resume flag (optional)
-        command: Command preset — default/thinkhard/ultrathink
-        context_turns: Number of turns to include from session context
-
-    Returns:
-        JSON with job_id and status "running"
-    """
-    try:
-        from agentibridge.dispatch import dispatch_task as _dispatch
-
-        result = await _dispatch(
-            task_description=task_description,
-            project=project,
-            session_id=session_id,
-            resume_session_id=resume_session_id,
-            command=command,
-            context_turns=context_turns,
-        )
-
-        return json.dumps({"success": True, **result})
-
-    except Exception as e:
-        log("MCP dispatch_task failed", {"task": task_description, "error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-async def get_dispatch_job(job_id: str) -> str:
-    """Get the status and output of a background dispatch job.
-
-    Args:
-        job_id: Job UUID returned by dispatch_task
-
-    Returns:
-        JSON with status ("running", "completed", "failed"), output, error,
-        duration_ms, claude_session_id, and other metadata.
-    """
-    from agentibridge.dispatch import get_job_status
-
-    data = get_job_status(job_id)
-    if data is None:
-        return json.dumps({"success": False, "error": f"Job not found: {job_id}"})
-    return json.dumps({"success": True, **data})
-
-
-@mcp.tool()
-async def list_dispatch_jobs(status: str = "", limit: int = 20) -> str:
-    """List dispatch jobs with optional status filter.
-
-    Returns job summaries (newest first) without the full output field,
-    so the response stays compact even with many jobs.
-
-    Args:
-        status: Filter by status ("running", "completed", "failed"). Empty = all.
-        limit: Maximum number of jobs to return (default: 20)
-
-    Returns:
-        JSON with jobs list and count
-    """
-    try:
-        from agentibridge.dispatch import list_jobs
-
-        jobs = list_jobs(status=status, limit=limit)
-        return json.dumps({"success": True, "count": len(jobs), "jobs": jobs})
-
-    except Exception as e:
-        log("MCP list_dispatch_jobs failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
 # =============================================================================
-# PHASE 4b — DISPATCH PLANS (plan-then-execute workflow)
-# =============================================================================
-
-
-@mcp.tool()
-async def plan_task(
-    task: str,
-    repo_url: str = "",
-    wait: bool = False,
-    timeout: int = 0,
-) -> str:
-    """Create an implementation plan without executing it.
-
-    Runs Claude in read-only mode (Read, Glob, Grep only) to analyse the
-    codebase and produce a markdown plan. The plan can later be executed
-    with execute_plan.
-
-    Args:
-        task: What to plan (same format as dispatch_task)
-        repo_url: Repo to analyse (optional)
-        wait: Block until plan is ready (default: false)
-        timeout: Timeout in seconds (0 = use default from env)
-
-    Returns:
-        JSON with plan_id, job_id, status, and (if wait=true) the plan content
-    """
-    try:
-        from agentibridge.plans import submit_plan
-
-        result = await submit_plan(task=task, repo_url=repo_url, wait=wait, timeout=timeout)
-        return json.dumps({"success": True, **result})
-
-    except Exception as e:
-        log("MCP plan_task failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-async def get_dispatch_plan(plan_id: str) -> str:
-    """Get a plan by ID, including its markdown content once ready.
-
-    Args:
-        plan_id: Plan UUID returned by plan_task
-
-    Returns:
-        JSON with plan details including status and content
-    """
-    try:
-        from agentibridge.plans import get_plan_status
-
-        data = get_plan_status(plan_id)
-        if data is None:
-            return json.dumps({"success": False, "error": f"Plan not found: {plan_id}"})
-        return json.dumps({"success": True, **data})
-
-    except Exception as e:
-        log("MCP get_dispatch_plan failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-async def list_dispatch_plans(status: str = "", limit: int = 20) -> str:
-    """List dispatch plans with optional status filter.
-
-    Returns plan summaries (newest first) without the content field,
-    so the response stays compact even with many plans.
-
-    Args:
-        status: Filter by status (planning/ready/failed/executing/completed). Empty = all.
-        limit: Maximum number of plans to return (default: 20)
-
-    Returns:
-        JSON with plans list and count
-    """
-    try:
-        from agentibridge.plans import list_plans as list_dispatch_plans_fn
-
-        plans = list_dispatch_plans_fn(status=status, limit=limit)
-        return json.dumps({"success": True, "count": len(plans), "plans": plans})
-
-    except Exception as e:
-        log("MCP list_dispatch_plans failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-async def execute_plan(
-    plan_id: str,
-    repo_url: str = "",
-    wait: bool = False,
-    timeout: int = 0,
-) -> str:
-    """Execute a ready plan by ID.
-
-    Submits a normal coding job with the plan injected as context.
-
-    Args:
-        plan_id: Plan ID returned by plan_task
-        repo_url: Override repo URL (defaults to the one used when planning)
-        wait: Block until execution completes
-        timeout: Timeout in seconds (0 = use default from env)
-
-    Returns:
-        JSON with job_id and status
-    """
-    try:
-        from agentibridge.plans import execute_plan as execute_plan_fn
-
-        result = await execute_plan_fn(plan_id=plan_id, repo_url=repo_url, wait=wait, timeout=timeout)
-        return json.dumps({"success": True, **result})
-
-    except ValueError as e:
-        return json.dumps({"success": False, "error": str(e)})
-
-    except Exception as e:
-        log("MCP execute_plan failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-# =============================================================================
-# HANDOFF — Cross-project context transfer
-# =============================================================================
-
-
-@mcp.tool()
-def list_handoff_projects() -> str:
-    """List available projects for handoff.
-
-    Scans ~/.claude/projects/ and returns decoded project paths with
-    session counts. Use this to discover valid targets for the handoff tool.
-
-    Returns:
-        JSON with projects list
-    """
-    try:
-        from agentibridge.catalog import list_projects
-        from agentibridge.config import CLAUDE_CODE_HOME_DIR
-
-        base_dir = Path(CLAUDE_CODE_HOME_DIR) / "projects"
-        projects = list_projects(base_dir)
-
-        return json.dumps(
-            {
-                "success": True,
-                "count": len(projects),
-                "projects": [p.to_dict() for p in projects],
-            }
-        )
-
-    except Exception as e:
-        log("MCP list_handoff_projects failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-async def handoff(
-    project_path: str,
-    summary: str,
-    decisions: str,
-    next_steps: str,
-    context: str = "",
-    source_session_id: str = "",
-    model: str = "sonnet",
-) -> str:
-    """Hand off context to a target project as a new conversation.
-
-    Creates a seeded Claude session in the target project with structured
-    context (summary, decisions, next steps). Blocks until the session is
-    created. Returns the session_id so the operator can resume with:
-        claude --resume <session_id>
-
-    The project_path can be a full path, an encoded project name, or a
-    fuzzy name like "agenticore" — it will be resolved against known projects.
-
-    Args:
-        project_path: Target project path or fuzzy name (e.g., "agenticore")
-        summary: What was accomplished in the current session
-        decisions: Key decisions made
-        next_steps: What the target session should do
-        context: Optional freeform additional context
-        source_session_id: Optional session to pull extra context from
-        model: Model for the target session (default: sonnet)
-
-    Returns:
-        JSON with session_id, project_path, output, duration_ms
-    """
-    try:
-        from agentibridge.catalog import resolve_project
-        from agentibridge.config import CLAUDE_CODE_HOME_DIR
-        from agentibridge.dispatch import handoff as _handoff
-
-        # Resolve fuzzy project name to full path
-        resolved_path = project_path
-        if not Path(project_path).is_absolute():
-            base_dir = Path(CLAUDE_CODE_HOME_DIR) / "projects"
-            match = resolve_project(base_dir, project_path)
-            if match is None:
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Project not found: {project_path}",
-                    }
-                )
-            resolved_path = match.path
-
-        result = await _handoff(
-            project_path=resolved_path,
-            summary=summary,
-            decisions=decisions,
-            next_steps=next_steps,
-            context=context,
-            source_session_id=source_session_id,
-            model=model,
-        )
-
-        return json.dumps(result)
-
-    except Exception as e:
-        log("MCP handoff failed", {"project": project_path, "error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-# =============================================================================
-# PHASE 5 — KNOWLEDGE CATALOG (Memory, Plans, History)
+# PHASE 5 — KNOWLEDGE CATALOG (Memory, History)
 # =============================================================================
 
 
@@ -1015,116 +693,6 @@ def get_memory_file(project: str, filename: str = "MEMORY.md") -> str:
 
     except Exception as e:
         log("MCP get_memory_file failed", {"project": project, "filename": filename, "error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-def list_plans(
-    project: str = "",
-    codename: str = "",
-    limit: int = 30,
-    offset: int = 0,
-    include_agent_plans: bool = False,
-) -> str:
-    """List plans sorted by recency.
-
-    Plans (~/.claude/plans/*.md) are detailed implementation blueprints
-    linked to sessions via the codename/slug field.
-
-    Args:
-        project: Filter by project path substring
-        codename: Filter by codename substring
-        limit: Maximum plans to return (default: 30)
-        offset: Skip first N results for pagination
-        include_agent_plans: Include agent subplans (default: False)
-
-    Returns:
-        JSON with plans list
-    """
-    try:
-        _get_collector()
-        store = _get_store()
-
-        plans = store.list_plans(
-            project=project if project else None,
-            codename=codename if codename else None,
-            limit=limit,
-            offset=offset,
-            include_agent_plans=include_agent_plans,
-        )
-
-        return json.dumps(
-            {
-                "success": True,
-                "count": len(plans),
-                "offset": offset,
-                "plans": [
-                    {
-                        "codename": p.codename,
-                        "file_size_bytes": p.file_size_bytes,
-                        "last_modified": p.last_modified,
-                        "is_agent_plan": p.is_agent_plan,
-                        "parent_codename": p.parent_codename,
-                        "session_ids": p.session_ids,
-                        "project_path": p.project_path,
-                    }
-                    for p in plans
-                ],
-            }
-        )
-
-    except Exception as e:
-        log("MCP list_plans failed", {"error": str(e)})
-        return json.dumps({"success": False, "error": str(e)})
-
-
-@mcp.tool()
-def get_plan(codename: str, include_agent_plans: bool = False) -> str:
-    """Read a plan by codename.
-
-    Args:
-        codename: Plan codename (e.g., "cached-wondering-sloth")
-        include_agent_plans: Include agent subplans (default: False)
-
-    Returns:
-        JSON with codename, content, session_ids, project_path, agent_plans
-    """
-    try:
-        _get_collector()
-        store = _get_store()
-
-        result = store.get_plan(codename, include_agent_plans=include_agent_plans)
-        if result is None:
-            return json.dumps({"success": False, "error": f"Plan not found: {codename}"})
-
-        plan = result["plan"]
-        response = {
-            "success": True,
-            "codename": plan.codename,
-            "content": plan.content,
-            "file_size_bytes": plan.file_size_bytes,
-            "last_modified": plan.last_modified,
-            "session_ids": plan.session_ids,
-            "project_path": plan.project_path,
-        }
-
-        if include_agent_plans:
-            response["agent_plans"] = [
-                {
-                    "codename": ap.codename,
-                    "content": ap.content,
-                    "file_size_bytes": ap.file_size_bytes,
-                    "last_modified": ap.last_modified,
-                }
-                for ap in result["agent_plans"]
-            ]
-        else:
-            response["agent_plans"] = []
-
-        return json.dumps(response)
-
-    except Exception as e:
-        log("MCP get_plan failed", {"codename": codename, "error": str(e)})
         return json.dumps({"success": False, "error": str(e)})
 
 
@@ -1438,8 +1006,10 @@ async def run_agent(
     LOCAL AGENTS (transport="local", agent_type="local") ARE ALWAYS CALLABLE —
     including when their status is "idle". "idle" means only that no claude
     session is currently running in the agent's package dir; dispatch cold-starts
-    a fresh one. Do NOT hedge, warn, or skip the call because an agent is idle.
-    Only HTTP agents require "online" (an offline pod genuinely cannot serve).
+    a fresh one and runs it to completion, whatever ``wait`` says — there is no
+    background job id left to poll. Do NOT hedge, warn, or skip the call because
+    an agent is idle. Only HTTP agents require "online" (an offline pod genuinely
+    cannot serve); for them ``wait`` still controls whether the call blocks.
 
     For HTTP agents: looks up the agent, checks it's online and has capacity, then
     forwards the task to its REST API. Returns job_id from the target agent.
@@ -1449,7 +1019,8 @@ async def run_agent(
         task: What the agent should do
         profile: Execution profile (optional — agent uses its default if omitted)
         repo_url: GitHub repo URL (optional)
-        wait: If true, block until job completes (default: false)
+        wait: If true, block until job completes (default: false). Ignored for
+            local agents, which always run to completion.
         file_path: Path to .mcp.json on shared FS (optional)
 
     Returns:
@@ -1484,16 +1055,18 @@ async def dispatch_to_agent(
     """Route a task to the best available agent with a specific capability.
 
     Local agents are candidates even when "idle" — dispatch cold-starts a fresh
-    claude in their package dir, so an idle local agent is fully callable. A warm
-    (online) agent is preferred when several share the capability. Only HTTP
-    agents must be online to be selected.
+    claude in their package dir and runs it to completion, whatever ``wait``
+    says, so an idle local agent is fully callable. A warm (online) agent is
+    preferred when several share the capability. Only HTTP agents must be
+    online to be selected.
 
     Args:
         capability: Required capability (e.g., "profile:coding", "agent:publishing", "agent_mode")
         task: What the agent should do
         profile: Execution profile (optional)
         repo_url: GitHub repo URL (optional)
-        wait: If true, block until job completes (default: false)
+        wait: If true, block until job completes (default: false). Ignored for
+            local agents, which always run to completion.
         file_path: Path to .mcp.json on shared FS (optional)
 
     Returns:

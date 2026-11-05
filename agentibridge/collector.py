@@ -4,10 +4,9 @@ Scans ~/.claude/projects/ for JSONL transcript files and incrementally
 indexes new entries into the SessionStore. Runs as a daemon thread
 inside the MCP server process.
 
-Phase 5 additions: memory files, plans, and history scanning.
+Phase 5 additions: memory files and history scanning.
 """
 
-import json
 import os
 import sys
 import threading
@@ -33,7 +32,6 @@ class SessionCollector:
         self._interval = int(os.getenv("AGENTIBRIDGE_POLL_INTERVAL", "60"))
         _home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home() / ".claude")))
         self._projects_dir = _home / "projects"
-        self._plans_dir = _home / "plans"
         self._history_file = _home / "history.jsonl"
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -90,9 +88,8 @@ class SessionCollector:
         except Exception as e:
             log("Collector: scan error", {"error": str(e)})
 
-        # Phase 5: scan memory files, plans, and history
+        # Phase 5: scan memory files and history
         memory_count = self._scan_memory_files()
-        plans_count = self._scan_plans()
         history_count = self._scan_history()
 
         # Phase 2: embed updated sessions + backfill un-embedded
@@ -111,7 +108,6 @@ class SessionCollector:
             "sessions_updated": sessions_updated,
             "entries_added": entries_added,
             "memory_files_indexed": memory_count,
-            "plans_indexed": plans_count,
             "history_entries_added": history_count,
             "sessions_embedded": embedded_count,
             "duration_ms": duration_ms,
@@ -166,26 +162,10 @@ class SessionCollector:
         if entries:
             self._store.add_entries(session_id, entries)
 
-        # Extract codename (slug) from first line of transcript
-        codename = self._extract_slug(filepath)
-        if codename:
-            self._store.upsert_codename(codename, session_id, project_encoded)
-
         # Save position
         self._store.save_file_position(str(filepath), new_offset)
 
         return {"updated": True, "entries_added": len(entries)}
-
-    def _extract_slug(self, filepath: Path) -> str:
-        """Read slug from first JSONL entry (cheap — reads one line)."""
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                first_line = f.readline().strip()
-                if first_line:
-                    return json.loads(first_line).get("slug", "")
-        except Exception:
-            pass
-        return ""
 
     # ------------------------------------------------------------------
     # Phase 2: Embedding pass
@@ -268,25 +248,6 @@ class SessionCollector:
             return len(files)
         except Exception as e:
             log("Collector: memory scan error", {"error": str(e)})
-            return 0
-
-    def _scan_plans(self) -> int:
-        """Scan and index plan files, resolving codename→session links."""
-        try:
-            from agentibridge.catalog import scan_plans_dir
-
-            plans = scan_plans_dir(self._plans_dir)
-            for plan in plans:
-                # Resolve session_ids via codename index
-                codename = plan.parent_codename if plan.is_agent_plan else plan.codename
-                sessions = self._store.get_sessions_for_codename(codename)
-                if sessions:
-                    plan.session_ids = [s["session_id"] for s in sessions]
-                    plan.project_path = sessions[0].get("project", "")
-                self._store.upsert_plan(plan)
-            return len(plans)
-        except Exception as e:
-            log("Collector: plans scan error", {"error": str(e)})
             return 0
 
     def _scan_history(self) -> int:

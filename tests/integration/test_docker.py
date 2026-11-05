@@ -792,24 +792,23 @@ print(json.dumps({"success": result["success"], "error": result.get("error", "")
         record("4.3", "restore_session — missing session", "fail", str(e)[:120])
         failed += 1
 
-    # Test: dispatch_task — module loads (actual dispatch needs API server)
-    print("\n[4.4] dispatch_task — import check")
+    # Test: dispatch.py — module loads
+    print("\n[4.4] dispatch module — import check")
     try:
         out = docker_exec("""
 import json
-from agentibridge.dispatch import restore_session_context, dispatch_task
-print(json.dumps({"restore": "ok", "dispatch": "ok"}))
+from agentibridge.dispatch import restore_session_context
+print(json.dumps({"restore": "ok"}))
 """)
         data = json.loads(out.strip().split("\n")[-1])
         assert data["restore"] == "ok"
-        assert data["dispatch"] == "ok"
         detail = "Dispatch module loaded"
         print(f"  {detail}")
-        record("4.4", "dispatch_task — import check", "pass", detail)
+        record("4.4", "dispatch module — import check", "pass", detail)
         passed += 1
     except Exception as e:
         print(f"  FAILED: {e}")
-        record("4.4", "dispatch_task — import check", "fail", str(e)[:120])
+        record("4.4", "dispatch module — import check", "fail", str(e)[:120])
         failed += 1
 
     print(f"\nPhase 4: {passed} passed, {failed} failed")
@@ -822,7 +821,7 @@ print(json.dumps({"restore": "ok", "dispatch": "ok"}))
 
 
 def test_phase5():
-    """Test Phase 5: Knowledge Catalog (memory, plans, history)."""
+    """Test Phase 5: Knowledge Catalog (memory, history)."""
     print("\n" + "=" * 60)
     print("PHASE 5: Knowledge Catalog")
     print("=" * 60)
@@ -893,50 +892,8 @@ print(json.dumps(result))
         record("5.3", "get_memory_file — content check", "fail", str(e)[:120])
         failed += 1
 
-    # Test: list_plans
-    print("\n[5.4] list_plans")
-    try:
-        out = docker_exec("""
-import json
-from agentibridge.server import list_plans
-result = json.loads(list_plans())
-print(json.dumps(result))
-""")
-        data = json.loads(out.strip().split("\n")[-1])
-        assert data["success"], f"list_plans failed: {data}"
-        assert data["count"] >= 2, f"Expected >=2 plans, got {data['count']}"
-        detail = f"Found {data['count']} plans"
-        print(f"  {detail}")
-        record("5.4", "list_plans", "pass", detail)
-        passed += 1
-    except Exception as e:
-        print(f"  FAILED: {e}")
-        record("5.4", "list_plans", "fail", str(e)[:120])
-        failed += 1
-
-    # Test: get_plan with agent plans
-    print("\n[5.5] get_plan — with agent plans")
-    try:
-        out = docker_exec("""
-import json
-from agentibridge.server import get_plan
-result = json.loads(get_plan(codename="fancy-coding-parrot", include_agent_plans=True))
-print(json.dumps(result))
-""")
-        data = json.loads(out.strip().split("\n")[-1])
-        assert data["success"], f"get_plan failed: {data}"
-        assert len(data.get("content", "")) > 0
-        detail = f"codename={data.get('codename', '?')}, agent_plans={len(data.get('agent_plans', []))}"
-        print(f"  Got plan: {detail}")
-        record("5.5", "get_plan — with agent plans", "pass", detail)
-        passed += 1
-    except Exception as e:
-        print(f"  FAILED: {e}")
-        record("5.5", "get_plan — with agent plans", "fail", str(e)[:120])
-        failed += 1
-
     # Test: search_history
-    print("\n[5.6] search_history — keyword")
+    print("\n[5.4] search_history — keyword")
     try:
         out = docker_exec("""
 import json
@@ -949,11 +906,11 @@ print(json.dumps(result))
         assert data["count"] >= 1, f"Expected >=1 history match, got {data['count']}"
         detail = f"{data['count']} entries for 'Docker'"
         print(f"  Found {detail}")
-        record("5.6", "search_history — keyword", "pass", detail)
+        record("5.4", "search_history — keyword", "pass", detail)
         passed += 1
     except Exception as e:
         print(f"  FAILED: {e}")
-        record("5.6", "search_history — keyword", "fail", str(e)[:120])
+        record("5.4", "search_history — keyword", "fail", str(e)[:120])
         failed += 1
 
     print(f"\nPhase 5: {passed} passed, {failed} failed")

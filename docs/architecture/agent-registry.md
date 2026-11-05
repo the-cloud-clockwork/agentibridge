@@ -234,7 +234,7 @@ Args:
   task      (str)              — what the agent should do
   profile   (str, optional)
   repo_url  (str, optional)
-  wait      (bool, default false)
+  wait      (bool, default false) — ignored for local agents, which always run to completion
   file_path (str, optional)
 Returns: JSON with success, agent_id, job details, or error with retry flag
 ```
@@ -249,7 +249,7 @@ Args:
   task       (str)
   profile    (str, optional)
   repo_url   (str, optional)
-  wait       (bool, default false)
+  wait       (bool, default false) — ignored for local agents, which always run to completion
   file_path  (str, optional)
 Returns: JSON with success, agent_id, routed_by, job details, or error with retry flag
 ```
@@ -275,5 +275,5 @@ AGENTIBRIDGE_LOCAL_SESSION_TTL=3600   # seconds a session stays "online" after l
 ## See Also
 
 - [Internal Architecture](internals.md) — Full module reference and design patterns
-- [Session Dispatch](session-dispatch.md) — `dispatch_task` / `run_claude` internals used by local-agent cold starts
+- [Session Dispatch](session-dispatch.md) — `run_claude` internals used by local-agent cold starts
 - [Configuration Reference](../reference/configuration.md) — All environment variables

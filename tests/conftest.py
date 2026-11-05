@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentibridge.catalog import HistoryEntry, MemoryFile, PlanFile
+from agentibridge.catalog import HistoryEntry, MemoryFile
 from agentibridge.parser import SessionEntry, SessionMeta
 
 
@@ -227,32 +227,6 @@ def make_memory_file(
     )
 
 
-def make_plan_file(
-    codename: str = "fancy-coding-parrot",
-    filename: str = "fancy-coding-parrot.md",
-    filepath: str = "/tmp/plans/fancy-coding-parrot.md",
-    content: str = "# Plan: Fancy Coding Parrot\n\n## Steps\n1. Do the thing",
-    file_size_bytes: int = 2048,
-    last_modified: str = "2025-06-01T12:00:00+00:00",
-    is_agent_plan: bool = False,
-    parent_codename: str = "fancy-coding-parrot",
-    session_ids: list = None,
-    project_path: str = "",
-) -> PlanFile:
-    return PlanFile(
-        codename=codename,
-        filename=filename,
-        filepath=filepath,
-        content=content,
-        file_size_bytes=file_size_bytes,
-        last_modified=last_modified,
-        is_agent_plan=is_agent_plan,
-        parent_codename=parent_codename,
-        session_ids=session_ids or [],
-        project_path=project_path,
-    )
-
-
 def make_history_entry(
     display: str = "Help me create a Docker Compose setup",
     timestamp: str = "2025-06-01T10:00:00+00:00",
@@ -295,25 +269,6 @@ def temp_memory_dir(tmp_path):
     proj2.mkdir(parents=True)
     (proj2 / "MEMORY.md").write_text("# Backend Memory\n\nAPI design notes.\n")
 
-    return tmp_path
-
-
-@pytest.fixture
-def temp_plans_dir(tmp_path):
-    """Create a temporary plans directory with plan files.
-
-    Creates:
-        tmp_path/fancy-coding-parrot.md
-        tmp_path/fancy-coding-parrot-agent-a1b2c3d.md
-        tmp_path/cool-jumping-fish.md
-    """
-    (tmp_path / "fancy-coding-parrot.md").write_text(
-        "# Plan: Fancy Coding Parrot\n\n## Steps\n1. Implement feature\n2. Write tests\n"
-    )
-    (tmp_path / "fancy-coding-parrot-agent-a1b2c3d.md").write_text(
-        "# Agent Subplan\n\n## Task\nImplement the helper module\n"
-    )
-    (tmp_path / "cool-jumping-fish.md").write_text("# Plan: Cool Jumping Fish\n\n## Steps\n1. Refactor module\n")
     return tmp_path
 
 

@@ -354,17 +354,12 @@ def cmd_help(args: argparse.Namespace) -> None:
     print("  search_semantic      Semantic search using embeddings")
     print("  generate_summary     AI-generated session summary")
     print()
-    print("Phase 4 — Write-back & Dispatch:")
+    print("Phase 4 — Write-back:")
     print("  restore_session      Load session context for continuation")
-    print("  dispatch_task        Dispatch task with session context")
-    print("  get_dispatch_job     Poll a dispatch job for status/output")
-    print("  list_dispatch_jobs   List dispatch jobs with status filter")
     print()
     print("Phase 5 — Knowledge Catalog:")
     print("  list_memory_files    List memory files across projects")
     print("  get_memory_file      Read a specific memory file")
-    print("  list_plans           List plans sorted by recency")
-    print("  get_plan             Read a plan by codename")
     print("  search_history       Search the global prompt history")
     print()
     print("CONFIGURATION")
@@ -1471,8 +1466,8 @@ _SEARCH_PROMPT_TMPL = (
     "  {query}\n\n"
     "Use the MCP tools available to you (list_sessions, search_sessions, "
     "search_history, search_semantic, get_session, list_memory_files, "
-    "list_plans, plus Read/Glob/Grep) to find the most relevant sessions, "
-    "files, history entries, memory files, or plans that match the query. "
+    "plus Read/Glob/Grep) to find the most relevant sessions, "
+    "files, history entries, or memory files that match the query. "
     "Return ONLY a compact JSON object of the form:\n"
     '  {{"success": true, "query": "<echo>", "count": N, '
     '"matches": [ {{...relevant fields per hit...}} ], '

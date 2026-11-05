@@ -22,14 +22,13 @@ ruff format --check agentibridge/ tests/
 ## Architecture
 
 ```
-MCP Server (server.py) — 33 tools
+MCP Server (server.py) — 23 tools
   Phase 1: list/get/search sessions
   Phase 2: semantic search + summary
   Phase 3: SSE/HTTP transport + auth
-  Phase 4: restore context + dispatch
-  Phase 5: memory, plans, history
+  Phase 4: restore context
+  Phase 5: memory, history
   Phase 6: A2A agent registry
-  Handoff: cross-project context transfer
         │
    ┌────┴────┐
    ▼         ▼
@@ -68,9 +67,9 @@ Host (native)                    Docker (databases only)
 | `local_agents.py` | Session-gated local agent discovery — AgentiHub packages on disk |
 | `oauth_provider.py` | OAuth 2.1 authorization server (opt-in) |
 | `embeddings.py` | Semantic search (Phase 2) |
-| `dispatch.py` | Background job dispatch, session restore, handoff |
-| `catalog.py` | Knowledge catalog: memory, plans, history, project discovery |
-| `claude_runner.py` | Claude CLI runner (dispatch + handoff) |
+| `dispatch.py` | Session context restore |
+| `catalog.py` | Knowledge catalog: memory, history |
+| `claude_runner.py` | Claude CLI subprocess runner (local agents, recon) |
 | `config.py` | Configuration with validation |
 | `cli.py` | CLI: install, status, connect, config, etc. |
 
@@ -103,7 +102,7 @@ AGENTIBRIDGE_MASTER_DIR=~/dev/tcc-ecosystem  # where init-interactive-agent open
 AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local/bin/agentihooks
 ```
 
-## MCP Tools (34 total)
+## MCP Tools (23 total)
 
 ### Phase 1 — Foundation
 `list_sessions`, `get_session`, `get_session_segment`, `get_session_actions`, `search_sessions`, `agent_search`, `collect_now`
@@ -111,21 +110,17 @@ AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local
 ### Phase 2 — Semantic Search
 `search_semantic`, `generate_summary`
 
-### Phase 4 — Write-back & Dispatch
-`restore_session`, `dispatch_task`, `get_dispatch_job`, `list_dispatch_jobs`, `plan_task`, `get_dispatch_plan`, `list_dispatch_plans`, `execute_plan`
+### Phase 4 — Write-back
+`restore_session`
 
 ### Phase 5 — Knowledge Catalog
-`list_memory_files`, `get_memory_file`, `list_plans`, `get_plan`, `search_history`
+`list_memory_files`, `get_memory_file`, `search_history`
 
 ### Phase 6 — A2A Agent Registry
 `register_agent`, `deregister_agent`, `heartbeat_agent`, `list_agents`, `get_agent`, `find_agents`, `discover_local_agents`, `run_agent`, `dispatch_to_agent`
 
 ### Master Agents
 `init-interactive-agent` — `master_agents.py`: runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR -- --route claude-ai --remote-control <name>`, a herdr tab with an interactive Claude Code session that claude.ai/code reaches through Remote Control. Succeeds only when init-agent reports `route_status=routed`.
-
-### Handoff — Cross-project Context Transfer
-- `list_handoff_projects` — Discover projects from `~/.claude/projects/` with session counts
-- `handoff` — Seed a conversation in a target project with structured context (summary, decisions, next steps). Blocks until session is created. Returns `session_id` + `resume_command` for `claude --resume`.
 
 ## A2A Agent Registry (Phase 6)
 

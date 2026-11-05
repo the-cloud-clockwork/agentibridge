@@ -4,7 +4,7 @@ Stores session metadata and transcript entries in Redis for fast access.
 Falls back to reading directly from the raw JSONL files when Redis is
 unavailable (no separate JSONL copy needed).
 
-Phase 5 additions: memory files, plans, history, and codename index.
+Phase 5 additions: memory files and history.
 """
 
 import hashlib
@@ -12,16 +12,13 @@ import json
 import os
 from pathlib import Path
 from time import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from agentibridge.catalog import (
     HistoryEntry,
     MemoryFile,
-    PlanFile,
     parse_history,
-    read_plan_content,
     scan_memory_files,
-    scan_plans_dir,
 )
 from agentibridge.parser import (
     SessionEntry,
@@ -62,7 +59,6 @@ class SessionStore:
         self._redis_checked = False
         _home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home() / ".claude")))
         self._projects_dir = _home / "projects"
-        self._plans_dir = _home / "plans"
         self._history_file = _home / "history.jsonl"
 
     # ------------------------------------------------------------------
@@ -562,177 +558,6 @@ class SessionStore:
             return None
 
     # ------------------------------------------------------------------
-    # Plans
-    # ------------------------------------------------------------------
-
-    def upsert_plan(self, plan: PlanFile) -> None:
-        """Create or update a plan record."""
-        r = self._get_redis()
-        if r is None:
-            return
-
-        if plan.is_agent_plan:
-            # Agent plans stored in a list under the parent
-            agent_key = _rkey(f"plan:{plan.parent_codename}:agents")
-            data_json = json.dumps(plan.to_dict())
-            # Remove existing entry for this codename, then rpush
-            existing = r.lrange(agent_key, 0, -1)
-            pipe = r.pipeline()
-            for item in existing:
-                try:
-                    obj = json.loads(item)
-                    if obj.get("codename") == plan.codename:
-                        pipe.lrem(agent_key, 1, item)
-                except json.JSONDecodeError:
-                    pass
-            pipe.rpush(agent_key, data_json)
-            pipe.execute()
-        else:
-            key = _rkey(f"plan:{plan.codename}")
-            mapping = {
-                "codename": plan.codename,
-                "filename": plan.filename,
-                "filepath": plan.filepath,
-                "content": plan.content,
-                "file_size_bytes": str(plan.file_size_bytes),
-                "last_modified": plan.last_modified,
-                "is_agent_plan": str(plan.is_agent_plan).lower(),
-                "parent_codename": plan.parent_codename,
-                "session_ids": json.dumps(plan.session_ids),
-                "project_path": plan.project_path,
-            }
-            pipe = r.pipeline()
-            pipe.hset(key, mapping=mapping)
-            try:
-                from datetime import datetime
-
-                score = datetime.fromisoformat(plan.last_modified).timestamp()
-            except (ValueError, AttributeError):
-                score = 0.0
-            pipe.zadd(_rkey("idx:plans:all"), {plan.codename: score})
-            pipe.execute()
-
-    def list_plans(
-        self,
-        project: Optional[str] = None,
-        codename: Optional[str] = None,
-        limit: int = 30,
-        offset: int = 0,
-        include_agent_plans: bool = False,
-    ) -> List[PlanFile]:
-        """List plans sorted by recency."""
-        r = self._get_redis()
-        if r is not None:
-            return self._redis_list_plans(r, project, codename, limit, offset, include_agent_plans)
-        return self._file_list_plans(project, codename, limit, offset, include_agent_plans)
-
-    def get_plan(self, codename: str, include_agent_plans: bool = False) -> Optional[Dict]:
-        """Get a plan by codename. Returns {plan: PlanFile, agent_plans: [PlanFile]}."""
-        r = self._get_redis()
-        if r is not None:
-            return self._redis_get_plan(r, codename, include_agent_plans)
-        return self._file_get_plan(codename, include_agent_plans)
-
-    def _redis_list_plans(self, r, project, codename, limit, offset, include_agent_plans) -> List[PlanFile]:
-        all_codenames = r.zrevrange(_rkey("idx:plans:all"), 0, -1)
-        results = []
-        for cn in all_codenames:
-            if codename and codename.lower() not in cn.lower():
-                continue
-            data = r.hgetall(_rkey(f"plan:{cn}"))
-            if not data:
-                continue
-            if project:
-                pp = data.get("project_path", "")
-                sids = data.get("session_ids", "[]")
-                if project.lower() not in pp.lower() and project.lower() not in sids.lower():
-                    continue
-            results.append(PlanFile.from_dict(data))
-
-        if not include_agent_plans:
-            results = [p for p in results if not p.is_agent_plan]
-
-        return results[offset : offset + limit]
-
-    def _redis_get_plan(self, r, codename: str, include_agent_plans: bool) -> Optional[Dict]:
-        from agentibridge.config import AGENTIBRIDGE_MAX_PLAN_CONTENT
-
-        data = r.hgetall(_rkey(f"plan:{codename}"))
-        if not data:
-            return None
-        plan = PlanFile.from_dict(data)
-        # Load content if not already loaded
-        if not plan.content and plan.filepath:
-            plan.content = read_plan_content(Path(plan.filepath), max_bytes=AGENTIBRIDGE_MAX_PLAN_CONTENT)
-
-        result: Dict = {"plan": plan}
-
-        if include_agent_plans:
-            agent_key = _rkey(f"plan:{codename}:agents")
-            raw_agents = r.lrange(agent_key, 0, -1)
-            agent_plans = []
-            for item in raw_agents:
-                try:
-                    obj = json.loads(item)
-                    ap = PlanFile.from_dict(obj)
-                    if not ap.content and ap.filepath:
-                        ap.content = read_plan_content(Path(ap.filepath), max_bytes=AGENTIBRIDGE_MAX_PLAN_CONTENT)
-                    agent_plans.append(ap)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            result["agent_plans"] = agent_plans
-        else:
-            result["agent_plans"] = []
-
-        return result
-
-    def _file_list_plans(self, project, codename, limit, offset, include_agent_plans) -> List[PlanFile]:
-        all_plans = scan_plans_dir(self._plans_dir)
-
-        if codename:
-            codename_lower = codename.lower()
-            all_plans = [p for p in all_plans if codename_lower in p.codename.lower()]
-
-        if not include_agent_plans:
-            all_plans = [p for p in all_plans if not p.is_agent_plan]
-
-        # Sort by mtime (newest first)
-        all_plans.sort(key=lambda p: p.last_modified, reverse=True)
-
-        if project:
-            # File fallback can't resolve project without codename index,
-            # so we skip project filtering in file mode
-            pass
-
-        return all_plans[offset : offset + limit]
-
-    def _file_get_plan(self, codename: str, include_agent_plans: bool) -> Optional[Dict]:
-        from agentibridge.config import AGENTIBRIDGE_MAX_PLAN_CONTENT
-
-        all_plans = scan_plans_dir(self._plans_dir)
-
-        main = None
-        agents = []
-        for p in all_plans:
-            if p.codename == codename and not p.is_agent_plan:
-                main = p
-            elif p.is_agent_plan and p.parent_codename == codename:
-                agents.append(p)
-
-        if main is None:
-            return None
-
-        main.content = read_plan_content(Path(main.filepath), max_bytes=AGENTIBRIDGE_MAX_PLAN_CONTENT)
-
-        if include_agent_plans:
-            for ap in agents:
-                ap.content = read_plan_content(Path(ap.filepath), max_bytes=AGENTIBRIDGE_MAX_PLAN_CONTENT)
-        else:
-            agents = []
-
-        return {"plan": main, "agent_plans": agents}
-
-    # ------------------------------------------------------------------
     # History
     # ------------------------------------------------------------------
 
@@ -800,72 +625,3 @@ class SessionStore:
 
         total = len(filtered)
         return filtered[offset : offset + limit], total
-
-    # ------------------------------------------------------------------
-    # Codename index (slug → session mapping)
-    # ------------------------------------------------------------------
-
-    def upsert_codename(self, codename: str, session_id: str, project_encoded: str) -> None:
-        """Map a codename (slug) to a session ID and project."""
-        r = self._get_redis()
-        if r is None:
-            return
-        cn_key = _rkey(f"codename:{codename}")
-        # Append session_id to existing list
-        existing = r.hget(cn_key, "session_ids")
-        if existing:
-            try:
-                ids = json.loads(existing)
-            except json.JSONDecodeError:
-                ids = []
-        else:
-            ids = []
-        if session_id not in ids:
-            ids.append(session_id)
-        pipe = r.pipeline()
-        pipe.hset(
-            cn_key,
-            mapping={
-                "session_ids": json.dumps(ids),
-                "project": decode_project_path(project_encoded),
-            },
-        )
-        # Reverse mapping: session → codename
-        pipe.set(_rkey(f"session:{session_id}:codename"), codename)
-        pipe.execute()
-
-    def get_sessions_for_codename(self, codename: str) -> List[Dict]:
-        """Look up sessions associated with a codename."""
-        r = self._get_redis()
-        if r is not None:
-            data = r.hgetall(_rkey(f"codename:{codename}"))
-            if not data:
-                return []
-            try:
-                ids = json.loads(data.get("session_ids", "[]"))
-            except json.JSONDecodeError:
-                ids = []
-            return [{"session_id": sid, "project": data.get("project", "")} for sid in ids]
-        return self._file_get_sessions_for_codename(codename)
-
-    def _file_get_sessions_for_codename(self, codename: str) -> List[Dict]:
-        """File fallback: scan transcripts for the slug field."""
-        import json as _json
-
-        results = []
-        for sid, project_encoded, filepath in scan_projects_dir(self._projects_dir):
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    first_line = f.readline().strip()
-                    if first_line:
-                        entry = _json.loads(first_line)
-                        if entry.get("slug") == codename:
-                            results.append(
-                                {
-                                    "session_id": sid,
-                                    "project": decode_project_path(project_encoded),
-                                }
-                            )
-            except Exception:
-                continue
-        return results

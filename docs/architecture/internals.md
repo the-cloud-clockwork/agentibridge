@@ -12,26 +12,25 @@ This document provides a deep dive into AgentiBridge's internal modules and impl
 
 | Module | Purpose | Key Functions/Classes |
 |--------|---------|----------------------|
-| `server.py` | FastMCP server with 33 tools | tool handlers, `main()` |
+| `server.py` | FastMCP server with 23 tools | tool handlers, `main()` |
 | `parser.py` | Pure-function JSONL transcript parser | `parse_transcript_entries()`, `scan_projects_dir()` |
 | `store.py` | SessionStore (Redis + filesystem fallback) | `SessionStore`, `get_session_meta()`, `list_sessions()` |
 | `collector.py` | Background polling daemon | `SessionCollector`, `collect_once()` |
 | `transport.py` | SSE/HTTP transport + API key auth + OAuth | `run_sse_server()`, auth middleware |
 | `oauth_provider.py` | OAuth 2.1 authorization server (opt-in) | `BridgeOAuthProvider` |
 | `embeddings.py` | Semantic search (Phase 2) | `TranscriptEmbedder`, `search_semantic()` |
-| `dispatch.py` | Session restore + task dispatch (Phase 4) | `restore_session_context()`, `dispatch_task()` |
-| `dispatch.py` | Host-side HTTP bridge for Docker dispatch | `GET /health`, `POST /dispatch` |
+| `dispatch.py` | Session restore (Phase 4) | `restore_session_context()` |
+| `dispatch_bridge.py` | Host-side HTTP bridge for Docker dispatch | `GET /health`, `POST /dispatch` |
 | `claude_runner.py` | Claude CLI subprocess wrapper | `run_claude()`, `ClaudeResult` |
 | `llm_client.py` | OpenAI-compatible embeddings + chat | `embed_text()`, `chat_completion()` |
 | `redis_client.py` | Redis helper | `get_redis()`, `redis_key()` |
 | `pg_client.py` | Postgres + pgvector connection | `get_pg()`, auto-schema creation |
 | `config.py` | Centralized env-var configuration | module-level constants |
 | `cli.py` | CLI helper tool | `run`, `stop`, `status`, `tunnel`, `bridge`, `locks` |
-| `catalog.py` | Knowledge catalog: memory, plans, history | `scan_memory_files()`, `scan_plans_dir()`, `parse_history()` |
+| `catalog.py` | Knowledge catalog: memory, history | `scan_memory_files()`, `parse_history()` |
 | `logging.py` | Structured JSON logging | `log()` |
 | `registry.py` | A2A agent registry: register/heartbeat/route (Phase 6) | `AgentRecord`, `register_agent()`, `list_agents()`, `route_to_agent()`, `route_by_capability()` |
 | `local_agents.py` | Session-gated local agent discovery (Phase 6) | `discover_local_agents()`, `get_local_agent()`, `read_package_manifest()` |
-| `plans.py` | Plan-then-execute dispatch workflow | `submit_plan()`, `execute_plan()`, `list_plans()`, `get_plan_status()` |
 
 ## Redis + File Fallback Pattern
 
@@ -73,10 +72,6 @@ agentibridge:sb:pos:{filepath_hash}      # Byte offset for incremental transcrip
 # Phase 5 — Knowledge Catalog
 agentibridge:sb:memory:{project}:{filename}        # Hash of memory file metadata + content
 agentibridge:sb:idx:memory                         # Sorted set of all memory file keys (score = mtime)
-agentibridge:sb:plan:{codename}                    # Hash of plan metadata + content
-agentibridge:sb:plan:{codename}:agents             # List of agent subplan codenames
-agentibridge:sb:idx:plans                          # Sorted set of all plan codenames (score = mtime)
-agentibridge:sb:codename:{slug}                    # Set of session IDs linked to a plan codename
 agentibridge:sb:history                            # List of JSON-serialized history entries
 agentibridge:sb:pos:history                        # Byte offset for incremental history.jsonl parsing
 ```
@@ -293,41 +288,27 @@ def search_semantic(query: str, limit: int = 10) -> list[dict]:
 
 `restore_session_context(session_id, last_n)` loads recent turns from a past session and formats them as a text block for injection into a new prompt. Returns a `dict` with the formatted `context` string and `char_count`.
 
-### Task Dispatch
+### Agent Dispatch
 
-`dispatch_task(...)` is fully async and fire-and-forget:
+`run_agent` / `dispatch_to_agent` call `run_claude()` (local subprocess or HTTP
+bridge) directly and return the finished result — a local agent always runs
+to completion, so there is no job id to poll. An HTTP agent's own job id and
+polling, if any, live entirely on that agent's REST API.
 
-1. Writes job state to `/tmp/agentibridge_jobs/{job_id}.json` immediately
-2. Starts an `asyncio.create_task()` — returns `job_id` to the caller
-3. Background task calls `run_claude()` (local subprocess or HTTP bridge)
-4. On completion, updates the job file with output, exit_code, duration_ms
-
-Clients poll with `get_dispatch_job(job_id)` until `status` is `completed` or `failed`.
-
-**Dispatch modes:**
+**Dispatch modes for `run_claude()`:**
 - **Local**: `CLAUDE_DISPATCH_URL` is empty → runs `claude` subprocess directly
-- **Bridge**: `CLAUDE_DISPATCH_URL` is set → HTTP POST to `dispatch.py` on the host
+- **Bridge**: `CLAUDE_DISPATCH_URL` is set → HTTP POST to `dispatch_bridge.py` on the host
 
 ## Knowledge Catalog (Phase 5)
 
 ### Data Sources
 
-Phase 5 exposes three knowledge categories from Claude Code's local filesystem:
+Phase 5 exposes two knowledge categories from Claude Code's local filesystem:
 
 | Source | Location | Format |
 |--------|----------|--------|
 | **Memory files** | `~/.claude/projects/{project}/memory/*.md` | Markdown files with curated project knowledge |
-| **Plans** | `~/.claude/plans/*.md` | Implementation blueprints linked to sessions via codename/slug |
 | **History** | `~/.claude/history.jsonl` | Every user prompt across all sessions with timestamps |
-
-### Agent Plans
-
-Plans with the suffix `-agent-{hex_hash}` are subplans created by agent subprocesses. They're linked to their parent plan by stripping the suffix:
-
-- `moonlit-rolling-reddy.md` — parent plan
-- `moonlit-rolling-reddy-agent-a1b2c3.md` — agent subplan
-
-When `include_agent_plans=True`, `get_plan` returns the parent content plus all linked agent subplans.
 
 ### Incremental History Parsing
 
@@ -341,11 +322,10 @@ The `parse_history()` function uses byte-offset tracking to avoid re-reading the
 
 ### Collector Integration
 
-`collect_once()` runs 3 additional scan passes after transcript indexing:
+`collect_once()` runs 2 additional scan passes after transcript indexing:
 
 1. **Memory scan**: `scan_memory_files()` finds `*.md` files in each project's `memory/` dir
-2. **Plans scan**: `scan_plans_dir()` reads `~/.claude/plans/`, resolves session IDs via codename index
-3. **History scan**: `parse_history()` incrementally reads new entries from `history.jsonl`
+2. **History scan**: `parse_history()` incrementally reads new entries from `history.jsonl`
 
 ## Error Handling Patterns
 

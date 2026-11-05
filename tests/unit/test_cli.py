@@ -61,7 +61,7 @@ class TestCmdHelp:
         assert "list_sessions" in output
         assert "get_session" in output
         assert "search_semantic" in output
-        assert "dispatch_task" in output
+        assert "restore_session" in output
         assert "CONFIGURATION" in output
 
     def test_shows_env_vars(self, capsys):

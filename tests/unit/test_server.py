@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -344,9 +344,9 @@ class TestRemoveTools:
 
         # Verify tool exists before removal
         tool_names_before = [t.name for t in srv.mcp._tool_manager.list_tools()]
-        assert "dispatch_task" in tool_names_before
+        assert "restore_session" in tool_names_before
 
-        with patch.dict("os.environ", {"AGENTIBRIDGE_REMOVE_TOOLS": "dispatch_task,search_semantic"}):
+        with patch.dict("os.environ", {"AGENTIBRIDGE_REMOVE_TOOLS": "restore_session,search_semantic"}):
             # Re-import to pick up the new env var
             import importlib
             import agentibridge.config
@@ -363,7 +363,7 @@ class TestRemoveTools:
                     pass
 
             tool_names_after = [t.name for t in srv.mcp._tool_manager.list_tools()]
-            assert "dispatch_task" not in tool_names_after
+            assert "restore_session" not in tool_names_after
             assert "search_semantic" not in tool_names_after
             # Other tools should still be present
             assert "list_sessions" in tool_names_after
@@ -414,29 +414,3 @@ class TestRemoveTools:
 
             tools_after = [t.name for t in srv.mcp._tool_manager.list_tools()]
             assert tools_before == tools_after
-
-
-@pytest.mark.unit
-class TestDispatchTask:
-    def test_success(self, reset_singletons):
-        import agentibridge.server as srv
-
-        srv._store = MagicMock()
-        srv._collector = _mock_collector()
-
-        with patch("agentibridge.dispatch.dispatch_task", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = {
-                "dispatched": True,
-                "completed": True,
-                "exit_code": 0,
-                "duration_ms": 1000,
-                "timed_out": False,
-                "output": {"result": "done"},
-                "error": None,
-                "context_session": None,
-                "prompt_length": 100,
-            }
-
-            result = json.loads(asyncio.run(srv.dispatch_task(task_description="Fix bug")))
-            assert result["success"] is True
-            assert result["dispatched"] is True

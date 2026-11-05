@@ -40,7 +40,7 @@ Your Claude Code sessions disappear when the terminal closes. AgentiBridge index
 - ⚙️ **Automatic indexing & embedding** — Background collector watches `~/.claude/projects/`, incrementally indexes new transcripts, and auto-embeds them for semantic search. No manual exports.
 - 🌐 **Multi-client** — Works with Claude Code CLI, claude.ai, ChatGPT, Grok, and any MCP-compatible client.
 - 🏠 **Fully self-hosted** — Your data stays on your machine. No SaaS, no vendor lock-in, no container image to maintain.
-- 🚀 **Background dispatch + handoff** — Fire-and-forget task dispatch with session restore. Seed a conversation in any project with structured context.
+- 🚀 **Session restore** — Load the context of a past session to seed a new conversation.
 - ⚡ **Native pip package, single env file** — No Docker image for the app. Install with pip, configure with `~/.agentibridge/agentibridge.env`, done.
 
 ---
@@ -182,27 +182,16 @@ See [CLI Reference](docs/reference/cli-commands.md) for all commands and flags.
 | `search_semantic` | "What were my sessions about database migrations?" |
 | `generate_summary` | "Summarize what happened in session abc123" |
 | `restore_session` | "Load the context from my last session on this project" |
-| `dispatch_task` | "Continue that refactor task in the background" |
-| `get_dispatch_job` | "What's the status of job xyz?" |
-| `list_dispatch_jobs` | "What jobs have I dispatched recently?" |
-| `plan_task` | "Draft a plan for the refactor before touching any code" |
-| `get_dispatch_plan` | "Show me the plan for job xyz" |
-| `list_dispatch_plans` | "What plans have I dispatched recently?" |
-| `execute_plan` | "That plan looks good — execute it" |
 | `list_memory_files` | "What memory files exist across my projects?" |
 | `get_memory_file` | "Show me the MEMORY.md for the antoncore project" |
-| `list_plans` | "What plans have I created recently?" |
-| `get_plan` | "Show me the plan called moonlit-rolling-reddy" |
 | `search_history` | "Find prompts where I mentioned docker" |
-| `list_handoff_projects` | "What projects can I hand off to?" |
-| `handoff` | "Hand off this context to the agenticore project" |
 | `register_agent` / `heartbeat_agent` / `deregister_agent` | A2A lifecycle — agents announce themselves, ping liveness, and leave |
 | `list_agents` / `get_agent` / `find_agents` | Discover peers by type, status, or capability |
 | `discover_local_agents` | "What local agent packages are available on this host?" |
 | `run_agent` | "Send this task straight to the finops agent" |
 | `dispatch_to_agent` | "Route this to whichever agent handles video editing" |
 
-> **Note:** `search_semantic` and `generate_summary` require `AGENTIBRIDGE_EMBEDDING_ENABLED=true` + LLM config. Sessions are embedded automatically by the collector — see [Semantic Search](docs/architecture/semantic-search.md). Use `agentibridge embeddings` to check pipeline status. `dispatch_task` and `agent_search` call the `claude` CLI directly on the host — `run_agent` and `dispatch_to_agent` do too, whenever they route to a local agent. `handoff` seeds a conversation in a target project with structured context — use `list_handoff_projects` to discover available targets. A2A tools work with Redis or filesystem fallback — see [Agent Registry](docs/architecture/internals.md).
+> **Note:** `search_semantic` and `generate_summary` require `AGENTIBRIDGE_EMBEDDING_ENABLED=true` + LLM config. Sessions are embedded automatically by the collector — see [Semantic Search](docs/architecture/semantic-search.md). Use `agentibridge embeddings` to check pipeline status. `agent_search` calls the `claude` CLI directly on the host — `run_agent` and `dispatch_to_agent` do too, whenever they route to a local agent; a local agent always runs to completion. A2A tools work with Redis or filesystem fallback — see [Agent Registry](docs/architecture/internals.md).
 
 ### Local Agents — session-gated AgentiHub packages
 
@@ -403,12 +392,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for testing, linting, and CI details.
 - [CLI Commands](docs/reference/cli-commands.md) — Full command and flag reference
 - [Semantic Search](docs/architecture/semantic-search.md) — Embedding backends and natural language search
 - [Remote Access & Auth](docs/architecture/remote-access.md) — SSE/HTTP transport and API key auth
-- [Session Dispatch](docs/architecture/session-dispatch.md) — Background task dispatch and context restore
+- [Session Dispatch](docs/architecture/session-dispatch.md) — Session context restore and agent dispatch
 - [Cloudflare Tunnel](docs/deployment/cloudflare-tunnel.md) — Expose to the internet securely
 - [Reverse Proxy](docs/deployment/reverse-proxy.md) — Nginx, Caddy, and Traefik configs
 - [Releases & CI/CD](docs/deployment/releases.md) — Release process and automation
 - [Internal Architecture](docs/architecture/internals.md) — Key modules and design patterns
-- [Knowledge Catalog](docs/architecture/knowledge-catalog.md) — Memory files, plans, and prompt history
+- [Knowledge Catalog](docs/architecture/knowledge-catalog.md) — Memory files and prompt history
 - [Troubleshooting](docs/reference/troubleshooting.md) — Common issues and solutions
 - [Contributing](CONTRIBUTING.md)
 

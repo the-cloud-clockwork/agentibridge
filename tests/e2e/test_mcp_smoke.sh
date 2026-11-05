@@ -165,9 +165,9 @@ check_list_memory_files() {
   echo "$result" | grep -qiE "(memory|file|project)" || return 1
 }
 
-check_list_plans() {
+check_restore_session() {
   local result="$1"
-  echo "$result" | grep -qiE "(plan|codename)" || return 1
+  echo "$result" | grep -qiE "(context|char_count|session)" || return 1
 }
 
 check_search_history() {
@@ -228,9 +228,9 @@ run_test 7 "list_memory_files" \
   "Use the list_memory_files MCP tool. Show the raw result." \
   check_list_memory_files
 
-run_test 8 "list_plans" \
-  "Use the list_plans MCP tool with limit=3. Show the raw result." \
-  check_list_plans
+run_test 8 "restore_session" \
+  "First call list_sessions with limit=1 to get a session_id, then call restore_session with that session_id and last_n=5. Show the result." \
+  check_restore_session
 
 run_test 9 "search_history" \
   "Use the search_history MCP tool with query='test' and limit=3. Show the raw result." \

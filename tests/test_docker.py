@@ -595,16 +595,15 @@ print(json.dumps({"success": result["success"], "error": result.get("error", "")
     print(f"  Error handled: {data['error'][:60]}")
     passed += 1
 
-    # Test: dispatch_task — module loads (actual dispatch needs API server)
-    print("\n[4.4] dispatch_task — import check")
+    # Test: dispatch.py — module loads
+    print("\n[4.4] dispatch module — import check")
     out = docker_exec("""
 import json
-from agentibridge.dispatch import restore_session_context, dispatch_task
-print(json.dumps({"restore": "ok", "dispatch": "ok"}))
+from agentibridge.dispatch import restore_session_context
+print(json.dumps({"restore": "ok"}))
 """)
     data = json.loads(out.strip().split("\n")[-1])
     assert data["restore"] == "ok"
-    assert data["dispatch"] == "ok"
     print("  Dispatch module: loaded")
     passed += 1
 

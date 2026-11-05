@@ -61,7 +61,7 @@ AgentiBridge has two run modes that can run simultaneously without conflict:
 |----------|---------|-------------|
 | `AGENTIBRIDGE_POLL_INTERVAL` | `60` | How often the collector scans for new transcript data (seconds). Minimum: 5 |
 | `AGENTIBRIDGE_MAX_ENTRIES` | `500` | Maximum transcript entries to store per session in Redis. `0` = unlimited (use with caution) |
-| `CLAUDE_CODE_HOME_DIR` | `~/.claude` | Claude Code home directory. All paths (projects, plans, history, memory) derive from this |
+| `CLAUDE_CODE_HOME_DIR` | `~/.claude` | Claude Code home directory. All paths (projects, history, memory) derive from this |
 
 ### Storage — Postgres + pgvector (semantic search)
 
@@ -120,7 +120,6 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 |----------|---------|-------------|
 | `AGENTIBRIDGE_MAX_HISTORY_ENTRIES` | `5000` | Maximum history entries to store in Redis. `0` = unlimited |
 | `AGENTIBRIDGE_MAX_MEMORY_CONTENT` | `51200` | Maximum bytes to read from a single memory file (50KB) |
-| `AGENTIBRIDGE_MAX_PLAN_CONTENT` | `102400` | Maximum bytes to read from a single plan file (100KB) |
 
 ### Local Agents Configuration (Phase 6)
 
@@ -264,10 +263,6 @@ All Redis keys follow the pattern: `{REDIS_KEY_PREFIX}:sb:{suffix}`
 - `{prefix}:sb:pos:{filepath_hash}` — String: byte offset for incremental transcript reading
 - `{prefix}:sb:memory:{project}:{filename}` — Hash: memory file metadata + content
 - `{prefix}:sb:idx:memory` — Sorted set: all memory file keys by last modified
-- `{prefix}:sb:plan:{codename}` — Hash: plan metadata + content
-- `{prefix}:sb:plan:{codename}:agents` — List: agent subplan codenames
-- `{prefix}:sb:idx:plans` — Sorted set: all plan codenames by last modified
-- `{prefix}:sb:codename:{slug}` — Set: session IDs linked to a plan codename
 - `{prefix}:sb:history` — List: JSON-serialized prompt history entries
 - `{prefix}:sb:pos:history` — String: byte offset for incremental history parsing
 

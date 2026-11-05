@@ -127,15 +127,11 @@ OAUTH_ALLOWED_SCOPES = os.getenv("OAUTH_ALLOWED_SCOPES", "")
 # AGENTIBRIDGE — KNOWLEDGE CATALOG (Phase 5)
 # =============================================================================
 
-AGENTIBRIDGE_PLANS_DIR = str(Path(CLAUDE_CODE_HOME_DIR) / "plans")
-
 AGENTIBRIDGE_HISTORY_FILE = str(Path(CLAUDE_CODE_HOME_DIR) / "history.jsonl")
 
 AGENTIBRIDGE_MAX_HISTORY_ENTRIES = _env_int("AGENTIBRIDGE_MAX_HISTORY_ENTRIES", "5000", min_val=0)
 
 AGENTIBRIDGE_MAX_MEMORY_CONTENT = _env_int("AGENTIBRIDGE_MAX_MEMORY_CONTENT", "51200", min_val=1024)
-
-AGENTIBRIDGE_MAX_PLAN_CONTENT = _env_int("AGENTIBRIDGE_MAX_PLAN_CONTENT", "102400", min_val=1024)
 
 # =============================================================================
 # AGENTIBRIDGE — LOCAL AGENTS (Phase 6)
