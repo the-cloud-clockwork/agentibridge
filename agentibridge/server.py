@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Dict
 import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
+from agentibridge.commands import describe, preflight
 from agentibridge.google_signin import CALLBACK_PATH
 from agentibridge.logging import log
 
@@ -1122,6 +1123,15 @@ async def init_interactive_agent(name: str = "", prompt: str = "") -> str:
     from agentibridge.master_agents import launch_master
 
     result = await anyio.to_thread.run_sync(partial(launch_master, name, prompt))
+    return json.dumps(result)
+
+
+@mcp.tool(description=describe(preflight()))
+async def run_command(command: str, shell: str = "", timeout: int = 60, cwd: str = "") -> str:
+    """Run one bash or PowerShell command on this workstation; the description carries the host preflight."""
+    from agentibridge.commands import run_command as run
+
+    result = await anyio.to_thread.run_sync(partial(run, command, shell, timeout, cwd))
     return json.dumps(result)
 
 

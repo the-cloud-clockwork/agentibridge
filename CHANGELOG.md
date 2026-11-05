@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the matching nonce and a verified email listed in
   `OAUTH_ALLOWED_EMAILS`. Without it the server warns that authorization is
   auto-approved. Adds the `pyjwt[crypto]` dependency.
+- **`run_command` MCP tool** — runs one bash or PowerShell (`pwsh`, or
+  `powershell.exe` on Windows and WSL) command on the bridge host and returns
+  its exit code, stdout and stderr. stdin is closed, the environment is an
+  allowlist without bridge settings, each stream is capped at 64 KiB, and the
+  whole process group is killed at `timeout` (max 600 s). The host preflight
+  (OS, distribution, kernel, WSL, shells) is in the tool description.
 
 ### Removed
 

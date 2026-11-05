@@ -22,7 +22,7 @@ ruff format --check agentibridge/ tests/
 ## Architecture
 
 ```
-MCP Server (server.py) — 23 tools
+MCP Server (server.py) — 24 tools
   Phase 1: list/get/search sessions
   Phase 2: semantic search + summary
   Phase 3: SSE/HTTP transport + auth
@@ -102,7 +102,7 @@ AGENTIBRIDGE_MASTER_DIR=~/dev/tcc-ecosystem  # where init-interactive-agent open
 AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local/bin/agentihooks
 ```
 
-## MCP Tools (23 total)
+## MCP Tools (24 total)
 
 ### Phase 1 — Foundation
 `list_sessions`, `get_session`, `get_session_segment`, `get_session_actions`, `search_sessions`, `agent_search`, `collect_now`
@@ -121,6 +121,9 @@ AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local
 
 ### Master Agents
 `init-interactive-agent` — `master_agents.py`: runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR -- --route claude-ai --remote-control <name>`, a herdr tab with an interactive Claude Code session that claude.ai/code reaches through Remote Control. Succeeds only when init-agent reports `route_status=routed`.
+
+### Commands
+`run_command` — `commands.py`: runs one bash or PowerShell command on the host with stdin closed, an allowlisted environment, 64 KiB per stream and a process-group kill at `timeout` (max 600 s). The host preflight (OS, distribution, WSL, shells) is computed once and written into the tool description.
 
 ## A2A Agent Registry (Phase 6)
 
