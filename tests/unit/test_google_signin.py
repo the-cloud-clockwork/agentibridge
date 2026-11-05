@@ -9,6 +9,8 @@ from urllib.parse import parse_qs, urlparse
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from mcp.server.auth.provider import AuthorizationParams, AuthorizeError
+from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -16,8 +18,6 @@ from starlette.testclient import TestClient
 
 from agentibridge.google_signin import CALLBACK_PATH, START_PATH, SignInRefused, sign_in_url, verified_email
 from agentibridge.oauth_provider import BridgeOAuthProvider, binding_cookie
-from mcp.server.auth.provider import AuthorizationParams, AuthorizeError
-from mcp.shared.auth import OAuthClientInformationFull
 
 CLIENT_ID = "client-under-test.apps.googleusercontent.com"
 ISSUER = "https://bridge.example.com"
@@ -195,6 +195,9 @@ class TestProviderGate:
 
         with pytest.raises(SignInRefused, match="not started in this browser"):
             provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"]), "")
+        location = provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"]), query["binding"])
+
+        assert location.startswith(REDIRECT)
 
     @pytest.mark.asyncio
     async def test_a_sign_in_never_started_at_the_bridge_is_refused(self) -> None:

@@ -241,11 +241,12 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
     def finish_google_sign_in(self, state: str, id_token: str, binding: str) -> str:
         """The client redirect with a fresh code, once the starting browser proves an allowed Google account."""
         with self._pending_lock:
-            pending = self._pending.pop(state, None)
-        if pending is None or not pending.started or pending.expires_at < time.time():
-            raise SignInRefused("sign-in request unknown or expired")
-        if not secrets.compare_digest(binding.encode(), pending.binding.encode()):
-            raise SignInRefused("sign-in was not started in this browser")
+            pending = self._pending.get(state)
+            if pending is None or not pending.started or pending.expires_at < time.time():
+                raise SignInRefused("sign-in request unknown or expired")
+            if not secrets.compare_digest(binding.encode(), pending.binding.encode()):
+                raise SignInRefused("sign-in was not started in this browser")
+            del self._pending[state]
         if self._signing_keys is None:
             self._signing_keys = jwt.PyJWKClient(CERTS_URL)
         email = verified_email(id_token, self.google_client_id, pending.nonce, self.allowed_emails, self._signing_keys)
