@@ -37,7 +37,7 @@ import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
 from agentibridge.commands import describe, preflight
-from agentibridge.google_signin import CALLBACK_PATH
+from agentibridge.google_signin import CALLBACK_PATH, START_PATH
 from agentibridge.logging import log
 
 if TYPE_CHECKING:
@@ -114,6 +114,7 @@ mcp = FastMCP(
 )
 
 if _oauth_provider is not None and _oauth_provider.google_client_id:
+    mcp.custom_route(START_PATH, methods=["GET"])(_oauth_provider.google_start)
     mcp.custom_route(CALLBACK_PATH, methods=["POST"])(_oauth_provider.google_callback)
 
 # Lazy singletons

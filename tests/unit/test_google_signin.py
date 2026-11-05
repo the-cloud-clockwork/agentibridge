@@ -1,5 +1,6 @@
 """Unit tests for the Google sign-in gate on OAuth authorization."""
 
+import dataclasses
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -13,9 +14,9 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from agentibridge.google_signin import CALLBACK_PATH, SignInRefused, sign_in_url, verified_email
-from agentibridge.oauth_provider import BridgeOAuthProvider
-from mcp.server.auth.provider import AuthorizationParams
+from agentibridge.google_signin import CALLBACK_PATH, START_PATH, SignInRefused, sign_in_url, verified_email
+from agentibridge.oauth_provider import BridgeOAuthProvider, binding_cookie
+from mcp.server.auth.provider import AuthorizationParams, AuthorizeError
 from mcp.shared.auth import OAuthClientInformationFull
 
 CLIENT_ID = "client-under-test.apps.googleusercontent.com"
@@ -75,9 +76,28 @@ def _provider() -> BridgeOAuthProvider:
     return provider
 
 
-async def _started(provider: BridgeOAuthProvider) -> dict[str, str]:
-    url = await provider.authorize(_client(), _params())
+def _query(url: str) -> dict[str, str]:
     return {key: values[0] for key, values in parse_qs(urlparse(url).query).items()}
+
+
+async def _parked(provider: BridgeOAuthProvider) -> str:
+    return _query(await provider.authorize(_client(), _params()))["state"]
+
+
+async def _started(provider: BridgeOAuthProvider) -> dict[str, str]:
+    state = await _parked(provider)
+    google, binding = provider.begin_google_sign_in(state)
+    return {**_query(google), "binding": binding}
+
+
+def _browser(provider: BridgeOAuthProvider) -> TestClient:
+    app = Starlette(
+        routes=[
+            Route(START_PATH, provider.google_start, methods=["GET"]),
+            Route(CALLBACK_PATH, provider.google_callback, methods=["POST"]),
+        ]
+    )
+    return TestClient(app, base_url="https://testserver", follow_redirects=False)
 
 
 @pytest.mark.unit
@@ -130,47 +150,94 @@ class TestVerifiedEmail:
 @pytest.mark.unit
 class TestProviderGate:
     @pytest.mark.asyncio
-    async def test_authorize_sends_the_browser_to_google(self) -> None:
+    async def test_authorize_sends_the_browser_to_the_bridge_start_page(self) -> None:
         provider = _provider()
 
-        query = await _started(provider)
+        url = urlparse(await provider.authorize(_client(), _params()))
+        state = _query(url.geturl())["state"]
+
+        assert f"{url.scheme}://{url.netloc}{url.path}" == f"{ISSUER}{START_PATH}"
+        assert state in provider._pending
+        assert provider._auth_codes == {}
+
+    @pytest.mark.asyncio
+    async def test_begin_hands_out_the_google_url_once(self) -> None:
+        provider = _provider()
+        state = await _parked(provider)
+
+        google, binding = provider.begin_google_sign_in(state)
+        query = _query(google)
 
         assert query["client_id"] == CLIENT_ID
         assert query["redirect_uri"] == f"{ISSUER}{CALLBACK_PATH}"
-        assert provider._pending[query["state"]].nonce == query["nonce"]
-        assert provider._auth_codes == {}
+        assert query["state"] == state
+        assert query["nonce"] == provider._pending[state].nonce
+        assert binding == provider._pending[state].binding
+        with pytest.raises(SignInRefused):
+            provider.begin_google_sign_in(state)
 
     @pytest.mark.asyncio
     async def test_allowed_sign_in_issues_the_code_to_the_client(self) -> None:
         provider = _provider()
         query = await _started(provider)
 
-        location = urlparse(provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"])))
-        returned = {key: values[0] for key, values in parse_qs(location.query).items()}
+        location = provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"]), query["binding"])
+        returned = _query(location)
 
-        assert f"{location.scheme}://{location.netloc}{location.path}" == REDIRECT
+        assert location.startswith(REDIRECT)
         assert returned["state"] == "client-state"
         assert provider._auth_codes[returned["code"]].client_id == "mcp-client"
+
+    @pytest.mark.asyncio
+    async def test_a_sign_in_finished_in_another_browser_is_refused(self) -> None:
+        provider = _provider()
+        query = await _started(provider)
+
+        with pytest.raises(SignInRefused, match="not started in this browser"):
+            provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"]), "")
+
+    @pytest.mark.asyncio
+    async def test_a_sign_in_never_started_at_the_bridge_is_refused(self) -> None:
+        provider = _provider()
+        state = await _parked(provider)
+        pending = provider._pending[state]
+
+        with pytest.raises(SignInRefused):
+            provider.finish_google_sign_in(state, _token(nonce=pending.nonce), pending.binding)
 
     @pytest.mark.asyncio
     async def test_a_sign_in_request_is_single_use(self) -> None:
         provider = _provider()
         query = await _started(provider)
         signed = _token(nonce=query["nonce"])
-        provider.finish_google_sign_in(query["state"], signed)
+        provider.finish_google_sign_in(query["state"], signed, query["binding"])
 
         with pytest.raises(SignInRefused):
-            provider.finish_google_sign_in(query["state"], signed)
+            provider.finish_google_sign_in(query["state"], signed, query["binding"])
 
     @pytest.mark.asyncio
-    async def test_an_expired_sign_in_request_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_an_expired_sign_in_request_is_refused(self) -> None:
         provider = _provider()
         query = await _started(provider)
-        later = time.time() + 601
-        monkeypatch.setattr("agentibridge.oauth_provider.time.time", lambda: later)
+        state = query["state"]
+        provider._pending[state] = dataclasses.replace(provider._pending[state], expires_at=time.time() - 1)
 
         with pytest.raises(SignInRefused):
-            provider.finish_google_sign_in(query["state"], _token(nonce=query["nonce"]))
+            provider.finish_google_sign_in(state, _token(nonce=query["nonce"]), query["binding"])
+
+    @pytest.mark.asyncio
+    async def test_pending_sign_ins_are_capped_and_expired_ones_make_room(self) -> None:
+        provider = _provider()
+        states = [await _parked(provider) for _ in range(64)]
+
+        with pytest.raises(AuthorizeError) as refused:
+            await provider.authorize(_client(), _params())
+        provider._pending[states[0]] = dataclasses.replace(provider._pending[states[0]], expires_at=time.time() - 1)
+        await provider.authorize(_client(), _params())
+
+        assert refused.value.error == "temporarily_unavailable"
+        assert states[0] not in provider._pending
+        assert len(provider._pending) == 64
 
     @pytest.mark.asyncio
     async def test_without_google_the_request_is_approved_directly(self) -> None:
@@ -183,17 +250,51 @@ class TestProviderGate:
 
 
 @pytest.mark.unit
-class TestCallbackRoute:
+class TestSignInRoutes:
     @pytest.mark.asyncio
-    async def test_valid_post_redirects_and_a_bad_one_is_forbidden(self) -> None:
+    async def test_start_sets_a_callback_scoped_cookie_and_redirects_to_google(self) -> None:
         provider = _provider()
-        good, bad = await _started(provider), await _started(provider)
-        app = Starlette(routes=[Route(CALLBACK_PATH, provider.google_callback, methods=["POST"])])
-        client = TestClient(app, follow_redirects=False)
+        state = await _parked(provider)
+        browser = _browser(provider)
 
-        accepted = client.post(CALLBACK_PATH, data={"state": good["state"], "id_token": _token(nonce=good["nonce"])})
-        refused = client.post(CALLBACK_PATH, data={"state": bad["state"], "id_token": _token(nonce="wrong")})
+        started = browser.get(START_PATH, params={"state": state})
+        again = browser.get(START_PATH, params={"state": state})
+        cookie = started.headers["set-cookie"].lower()
+
+        assert started.status_code == 302
+        assert started.headers["location"].startswith("https://accounts.google.com/")
+        assert cookie.startswith(f"{binding_cookie(state).lower()}={provider._pending[state].binding.lower()}")
+        assert all(part in cookie for part in ("httponly", "secure", "samesite=none", f"path={CALLBACK_PATH}"))
+        assert again.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_callback_needs_the_browser_that_started_the_sign_in(self) -> None:
+        provider = _provider()
+        good, stolen = await _parked(provider), await _parked(provider)
+        owner, attacker = _browser(provider), _browser(provider)
+        owner.get(START_PATH, params={"state": good})
+        attacker.get(START_PATH, params={"state": stolen})
+
+        accepted = owner.post(
+            CALLBACK_PATH, data={"state": good, "id_token": _token(nonce=provider._pending[good].nonce)}
+        )
+        refused = owner.post(
+            CALLBACK_PATH, data={"state": stolen, "id_token": _token(nonce=provider._pending[stolen].nonce)}
+        )
 
         assert accepted.status_code == 302
         assert accepted.headers["location"].startswith(REDIRECT)
         assert refused.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_callback_refuses_a_bad_token_and_an_oversized_body(self) -> None:
+        provider = _provider()
+        state = await _parked(provider)
+        browser = _browser(provider)
+        browser.get(START_PATH, params={"state": state})
+
+        oversized = browser.post(CALLBACK_PATH, data={"state": state, "id_token": "x" * 20000})
+        bad = browser.post(CALLBACK_PATH, data={"state": state, "id_token": _token(nonce="wrong")})
+
+        assert oversized.status_code == 413
+        assert bad.status_code == 403

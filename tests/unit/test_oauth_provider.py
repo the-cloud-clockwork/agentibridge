@@ -724,6 +724,8 @@ class TestPreConfiguredCredentials:
         # Verify stored client is retrievable
         stored = await provider.get_client("my-client")
         assert stored is not None
+        assert [str(uri) for uri in stored.redirect_uris] == [f"{_ISSUER}/callback"]
+        assert [str(uri) for uri in new_client.redirect_uris] == [f"{_ISSUER}/callback"]
 
     @pytest.mark.asyncio
     async def test_dynamic_registration_works_when_unlocked(self):

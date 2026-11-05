@@ -10,6 +10,7 @@ AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 ISSUERS = ("https://accounts.google.com", "accounts.google.com")
 CALLBACK_PATH = "/oauth/google/callback"
+START_PATH = "/oauth/google/start"
 
 
 class SignInRefused(Exception):
