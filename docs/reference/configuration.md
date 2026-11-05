@@ -130,6 +130,7 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED` | `false` | Master toggle for session-gated local agent discovery + dispatch. Must be explicitly set to `true` |
+| `AGENTIBRIDGE_RUN_COMMAND_ENABLED` | `false` | Serve the `run_command` tool. Ignored while OAuth is on without `OAUTH_GOOGLE_CLIENT_ID`, because authorization would be auto-approved |
 | `AGENTIHUB_DIR` | _(none)_ | AgentiHub checkout root containing `agents/`. Empty = auto-resolve by walking up for a sibling `agentihub/agents` directory |
 | `AGENTIBRIDGE_LOCAL_SESSION_TTL` | `3600` | Freshness window (seconds) for a local agent to count as "online" |
 

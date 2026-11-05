@@ -414,3 +414,29 @@ class TestRemoveTools:
 
             tools_after = [t.name for t in srv.mcp._tool_manager.list_tools()]
             assert tools_before == tools_after
+
+
+@pytest.mark.unit
+class TestRunCommandGate:
+    @pytest.mark.parametrize(
+        ("enabled", "provider", "served"),
+        [
+            (False, None, False),
+            (True, None, True),
+            (True, MagicMock(google_client_id=""), False),
+            (True, MagicMock(google_client_id="google-client"), True),
+            (False, MagicMock(google_client_id="google-client"), False),
+        ],
+        ids=["disabled", "no-oauth", "auto-approved-oauth", "google-sign-in", "disabled-with-google"],
+    )
+    def test_served_only_when_enabled_and_never_with_auto_approved_oauth(
+        self, enabled: bool, provider: MagicMock | None, served: bool
+    ) -> None:
+        from agentibridge.server import run_command_allowed
+
+        assert run_command_allowed(enabled, provider) is served
+
+    def test_disabled_by_default(self) -> None:
+        from agentibridge.server import mcp
+
+        assert "run_command" not in {tool.name for tool in mcp._tool_manager.list_tools()}

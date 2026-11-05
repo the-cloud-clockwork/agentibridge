@@ -36,7 +36,9 @@ from typing import TYPE_CHECKING, Dict
 import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
-from agentibridge.commands import describe, preflight
+from agentibridge.commands import DEFAULT_TIMEOUT_S, describe, preflight
+from agentibridge.commands import run_command as run_host_command
+from agentibridge.config import AGENTIBRIDGE_RUN_COMMAND_ENABLED
 from agentibridge.google_signin import CALLBACK_PATH, START_PATH
 from agentibridge.logging import log
 
@@ -1122,13 +1124,19 @@ async def init_interactive_agent(name: str = "", prompt: str = "") -> str:
     return json.dumps(result)
 
 
-@mcp.tool(description=describe(preflight()))
-async def run_command(command: str, shell: str = "", timeout: int = 60, cwd: str = "") -> str:
-    """Run one bash or PowerShell command on this workstation; the description carries the host preflight."""
-    from agentibridge.commands import run_command as run
+def run_command_allowed(enabled: bool, provider: "BridgeOAuthProvider | None") -> bool:
+    """Serve run_command only when enabled and OAuth, if configured, requires Google sign-in."""
+    return enabled and (provider is None or bool(provider.google_client_id))
 
-    result = await anyio.to_thread.run_sync(partial(run, command, shell, timeout, cwd))
+
+async def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S, cwd: str = "") -> str:
+    """Run one bash or PowerShell command on this workstation; the description carries the host preflight."""
+    result = await anyio.to_thread.run_sync(partial(run_host_command, command, shell, timeout, cwd))
     return json.dumps(result)
+
+
+if run_command_allowed(AGENTIBRIDGE_RUN_COMMAND_ENABLED, _oauth_provider):
+    mcp.tool(description=describe(preflight()))(run_command)
 
 
 # =============================================================================

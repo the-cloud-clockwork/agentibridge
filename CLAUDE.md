@@ -96,6 +96,7 @@ LLM_CHAT_MODEL=gpt-4o-mini
 CLAUDE_BINARY=/path/to/claude       # absolute path, set by `agentibridge install`
 AGENTIBRIDGE_HEARTBEAT_TTL=120
 AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=false  # feature flag for local (session-gated) agent discovery
+AGENTIBRIDGE_RUN_COMMAND_ENABLED=false   # serve run_command; refused while OAuth auto-approves (no OAUTH_GOOGLE_CLIENT_ID)
 AGENTIHUB_DIR=                      # empty = auto-resolve by walking up for a sibling agentihub/agents dir
 AGENTIBRIDGE_LOCAL_SESSION_TTL=3600 # seconds a live claude session keeps a package "online"
 AGENTIBRIDGE_MASTER_DIR=~/dev/tcc-ecosystem  # where init-interactive-agent opens master agents
@@ -123,7 +124,7 @@ AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local
 `init-interactive-agent` — `master_agents.py`: runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR -- --route claude-ai --remote-control <name>`, a herdr tab with an interactive Claude Code session that claude.ai/code reaches through Remote Control. Succeeds only when init-agent reports `route_status=routed`.
 
 ### Commands
-`run_command` — `commands.py`: runs one bash or PowerShell command on the host with stdin closed, an allowlisted environment, 64 KiB per stream and a process-group kill at `timeout` (max 600 s). The host preflight (OS, distribution, WSL, shells) is computed once and written into the tool description.
+`run_command` — `commands.py`: runs one bash or PowerShell command on the host with stdin closed, an allowlisted environment, 64 KiB per stream and a process-group kill when the command exits or hits `timeout` (max 600 s). Served only with `AGENTIBRIDGE_RUN_COMMAND_ENABLED=true`, and never while OAuth is on without Google sign-in. The host preflight (OS, distribution, WSL, shells) is computed once and written into the tool description.
 
 ## A2A Agent Registry (Phase 6)
 

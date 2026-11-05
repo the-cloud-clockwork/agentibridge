@@ -147,6 +147,8 @@ AGENTIBRIDGE_MAX_MEMORY_CONTENT = _env_int("AGENTIBRIDGE_MAX_MEMORY_CONTENT", "5
 # deployments see no behavior change until this is explicitly enabled.
 AGENTIBRIDGE_LOCAL_AGENTS_ENABLED = _env_bool("AGENTIBRIDGE_LOCAL_AGENTS_ENABLED", "false")
 
+AGENTIBRIDGE_RUN_COMMAND_ENABLED = _env_bool("AGENTIBRIDGE_RUN_COMMAND_ENABLED", "false")
+
 # AgentiHub checkout root (contains an ``agents/`` subdir). Empty = auto-resolve
 # via sibling-directory discovery. Same "empty means unset" convention as
 # OAUTH_ISSUER_URL — no universal default location, so never guessed here.
