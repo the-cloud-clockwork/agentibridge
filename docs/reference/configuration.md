@@ -132,6 +132,15 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 
 **What enabling local agents does.** With the flag on, `list_agents` / `get_agent` / `find_agents` additionally scan `<AGENTIHUB_DIR>/agents/<name>/package/` for `CLAUDE.md` packages and merge them in transparently alongside registered HTTP agents — nothing is persisted to Redis or the file store, the catalog is computed fresh on every read. Each package's capability tags come from its `command.yml`. Liveness is session-gated, not heartbeat-gated: a package is `online` only while a live Claude session's working directory maps to it within `AGENTIBRIDGE_LOCAL_SESSION_TTL`, otherwise it's `idle`. Local agents are never `offline` — they are always callable, because dispatch cold-starts a fresh `claude` process in the package directory regardless of whether a session is currently live there.
 
+### Master Agents Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTIBRIDGE_MASTER_DIR` | `~/dev/tcc-ecosystem` | Directory `init-interactive-agent` opens master agents in |
+| `AGENTIHOOKS_BINARY` | `agentihooks` on `PATH`, else `~/.local/bin/agentihooks` | The agentihooks CLI that runs `init-agent` |
+
+**What a master agent is.** `init-interactive-agent` runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR --name <name> -- --route claude-ai --remote-control <name>`: a herdr tab with an interactive Claude Code session on a stored claude.ai login, reachable from claude.ai/code through Remote Control. The tool succeeds only when init-agent reports `route_status=routed`.
+
 ### Logging Configuration
 
 | Variable | Default | Description |

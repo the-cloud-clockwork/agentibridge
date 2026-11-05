@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`init-interactive-agent` MCP tool** — starts a master agent: `agentihooks
+  init-agent` opens a herdr tab in `AGENTIBRIDGE_MASTER_DIR` (default
+  `~/dev/tcc-ecosystem`) running `agentihooks claude --route claude-ai` with
+  Remote Control on, so claude.ai/code can chat with it. New settings
+  `AGENTIBRIDGE_MASTER_DIR` and `AGENTIHOOKS_BINARY`.
+
 ## [1.0.0] - 2026-09-08
 
 ### Removed

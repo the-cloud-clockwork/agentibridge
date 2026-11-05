@@ -99,9 +99,11 @@ AGENTIBRIDGE_HEARTBEAT_TTL=120
 AGENTIBRIDGE_LOCAL_AGENTS_ENABLED=false  # feature flag for local (session-gated) agent discovery
 AGENTIHUB_DIR=                      # empty = auto-resolve by walking up for a sibling agentihub/agents dir
 AGENTIBRIDGE_LOCAL_SESSION_TTL=3600 # seconds a live claude session keeps a package "online"
+AGENTIBRIDGE_MASTER_DIR=~/dev/tcc-ecosystem  # where init-interactive-agent opens master agents
+AGENTIHOOKS_BINARY=                 # empty = agentihooks on PATH, else ~/.local/bin/agentihooks
 ```
 
-## MCP Tools (33 total)
+## MCP Tools (34 total)
 
 ### Phase 1 — Foundation
 `list_sessions`, `get_session`, `get_session_segment`, `get_session_actions`, `search_sessions`, `agent_search`, `collect_now`
@@ -117,6 +119,9 @@ AGENTIBRIDGE_LOCAL_SESSION_TTL=3600 # seconds a live claude session keeps a pack
 
 ### Phase 6 — A2A Agent Registry
 `register_agent`, `deregister_agent`, `heartbeat_agent`, `list_agents`, `get_agent`, `find_agents`, `discover_local_agents`, `run_agent`, `dispatch_to_agent`
+
+### Master Agents
+`init-interactive-agent` — `master_agents.py`: runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR -- --route claude-ai --remote-control <name>`, a herdr tab with an interactive Claude Code session that claude.ai/code reaches through Remote Control. Succeeds only when init-agent reports `route_status=routed`.
 
 ### Handoff — Cross-project Context Transfer
 - `list_handoff_projects` — Discover projects from `~/.claude/projects/` with session counts

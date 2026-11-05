@@ -1516,6 +1516,29 @@ async def dispatch_to_agent(
         return json.dumps({"success": False, "error": str(e)})
 
 
+@mcp.tool(name="init-interactive-agent")
+async def init_interactive_agent(name: str = "", prompt: str = "") -> str:
+    """Start a new master agent: an interactive Claude Code session on the master workstation.
+
+    Call this when the operator says "init a new master agent", "start a master agent" or
+    "open a master". A master agent opens in a herdr tab in AGENTIBRIDGE_MASTER_DIR
+    (default ~/dev/tcc-ecosystem) and runs `agentihooks claude --route claude-ai` with
+    Remote Control on, so it appears in claude.ai/code under its name, ready to chat with.
+
+    Args:
+        name: Session and Remote Control name (default: master-<yymmdd-hhmmss>)
+        prompt: Opening prompt for the new session (optional)
+
+    Returns:
+        JSON with success, name, directory, the init-agent report (host, pane_id,
+        route_status, account) and error when the launch failed
+    """
+    from agentibridge.master_agents import launch_master
+
+    result = await anyio.to_thread.run_sync(partial(launch_master, name, prompt))
+    return json.dumps(result)
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
