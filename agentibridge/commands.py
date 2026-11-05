@@ -157,7 +157,11 @@ def _argv(shell: str, path: str, command: str) -> list[str]:
 
 
 def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S, cwd: str = "") -> dict[str, Any]:
-    """Run ``command`` and return its exit code and output; its process group dies when it exits or times out."""
+    """Run ``command`` and return its exit code and output; its process group dies when it exits or times out.
+
+    A process that starts its own session and keeps the output pipes open survives the kill; one reader
+    thread per stream and its pipe stay open until that process exits.
+    """
     host = preflight()
     chosen = shell.strip().lower() or host["default_shell"]
     path = host["shells"].get(chosen)
