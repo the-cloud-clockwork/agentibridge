@@ -2,6 +2,7 @@
 
 import shutil
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -25,6 +26,14 @@ def _run(command: str, **options: Any) -> dict[str, Any]:
     return commands.run_command(command, **options)
 
 
+def _alive(pid: int) -> bool:
+    stat = Path(f"/proc/{pid}/stat")
+    try:
+        return stat.read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (FileNotFoundError, IndexError):
+        return False
+
+
 @pytest.mark.unit
 class TestPreflight:
     def test_reports_the_host_and_a_working_bash(self) -> None:
@@ -39,6 +48,26 @@ class TestPreflight:
 
         assert "Host: Distro 1.0 (WSL), Linux 6.0-test, x86_64, user someone on box." in text
         assert "Shells: bash, powershell. Default: bash." in text
+        assert "Commands run as someone and can read every file that user can" in text
+
+    @pytest.mark.parametrize(
+        ("env", "user"),
+        [({"USER": "alice"}, "alice"), ({"USERNAME": "bob"}, "bob"), ({}, "unknown")],
+        ids=["user", "username", "neither"],
+    )
+    def test_user_comes_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch, env: dict[str, str], user: str
+    ) -> None:
+        monkeypatch.delenv("USER", raising=False)
+        monkeypatch.delenv("USERNAME", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        commands.preflight.cache_clear()
+
+        try:
+            assert commands.preflight()["user"] == user
+        finally:
+            commands.preflight.cache_clear()
 
 
 @pytest.mark.unit
@@ -82,6 +111,16 @@ class TestRunCommand:
 
         assert result["stdout"] == "done\n"
         assert time.monotonic() - started < 10
+
+    def test_a_background_child_dies_when_the_command_exits(self) -> None:
+        result = _run("sleep 300 & echo $!", timeout=20)
+        pid = int(result["stdout"])
+        deadline = time.monotonic() + 5
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        assert result["exit_code"] == 0
+        assert not _alive(pid)
 
     def test_bridge_environment_stays_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AGENTIBRIDGE_API_KEYS", "visible-if-leaked")

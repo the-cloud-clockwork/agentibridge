@@ -1,7 +1,6 @@
 """Run one bash or PowerShell command on the bridge host, with a preflight of the host's OS and shells."""
 
 import contextlib
-import getpass
 import io
 import os
 import platform
@@ -72,7 +71,7 @@ def preflight() -> dict[str, Any]:
         "arch": platform.machine(),
         "wsl": system == "Linux" and "microsoft" in platform.release().lower(),
         "hostname": platform.node(),
-        "user": getpass.getuser(),
+        "user": os.environ.get("USER") or os.environ.get("USERNAME") or "unknown",
         "shells": shells,
         "default_shell": "powershell" if system == "Windows" else "bash",
     }
@@ -89,7 +88,11 @@ def describe(host: dict[str, Any]) -> str:
         f"Shells: {shells}. Default: {host['default_shell']}.\n\n"
         "stdin is closed, so interactive prompts fail instead of hanging. Each stream is capped at 64 KiB "
         "(truncated=true when cut). At `timeout` seconds (max 600) the whole process group is killed and the "
-        "partial output returns with timed_out=true. The environment is minimal: no login profile is loaded.\n\n"
+        "partial output returns with timed_out=true. When the command ends, anything it left running in its "
+        "process group is killed; a process that starts its own session keeps running. The environment is "
+        "minimal: no login profile is loaded.\n\n"
+        f"Commands run as {host['user']} and can read every file that user can, credentials under the home "
+        "directory included.\n\n"
         "Args:\n"
         "    command: The command line to run\n"
         "    shell: bash or powershell (empty: the host default)\n"
@@ -130,7 +133,7 @@ def _argv(shell: str, path: str, command: str) -> list[str]:
 
 
 def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S, cwd: str = "") -> dict[str, Any]:
-    """Run ``command`` and return its exit code and output; the process group dies at the timeout."""
+    """Run ``command`` and return its exit code and output; its process group dies when it exits or times out."""
     host = preflight()
     chosen = shell.strip().lower() or host["default_shell"]
     path = host["shells"].get(chosen)
@@ -162,8 +165,8 @@ def run_command(command: str, shell: str = "", timeout: int = DEFAULT_TIMEOUT_S,
         process.wait(timeout=max(1, min(timeout, MAX_TIMEOUT_S)))
     except subprocess.TimeoutExpired:
         timed_out = True
-        _kill_group(process)
-        process.wait()
+    _kill_group(process)
+    process.wait()
     for reader in readers:
         reader.join(DRAIN_GRACE_S)
     return {
