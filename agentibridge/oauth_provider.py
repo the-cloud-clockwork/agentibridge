@@ -10,8 +10,12 @@ Activated when OAUTH_ISSUER_URL is set.
 import os
 import secrets
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Optional
 
+import anyio.to_thread
+import jwt
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -22,13 +26,17 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
+from agentibridge.google_signin import CALLBACK_PATH, CERTS_URL, SignInRefused, sign_in_url, verified_email
 from agentibridge.logging import log
 
 # Token TTLs
 _AUTH_CODE_TTL = 300  # 5 minutes
 _ACCESS_TOKEN_TTL = 3600  # 1 hour
 _REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 days
+_SIGN_IN_TTL = 600
 
 
 def _get_redirect_uris() -> list:
@@ -41,11 +49,21 @@ def _get_redirect_uris() -> list:
     return [AnyUrl(u.strip()) for u in raw.split(",") if u.strip()]
 
 
+@dataclass(frozen=True)
+class PendingSignIn:
+    """An authorization request waiting for its Google sign-in."""
+
+    client: OAuthClientInformationFull
+    params: AuthorizationParams
+    nonce: str
+    expires_at: float
+
+
 class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
     """In-memory OAuth 2.1 provider for machine-to-machine bridge access.
 
-    Auto-approves authorization requests (no consent page needed for a
-    private bridge).
+    With a Google client ID, an authorization request waits for a Google
+    sign-in from an allowed account; without one it is auto-approved.
 
     When client_id/client_secret are pre-configured, dynamic registration
     returns the pre-configured credentials (claude.ai requires working
@@ -57,7 +75,9 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         issuer_url: str,
         client_id: str = "",
         client_secret: str = "",
-    ):
+        google_client_id: str = "",
+        allowed_emails: Iterable[str] = (),
+    ) -> None:
         self.issuer_url = issuer_url
         self._locked = bool(client_id and client_secret)
         # In-memory stores
@@ -67,6 +87,10 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_tokens: dict[str, RefreshToken] = {}
         # Map access_token -> refresh_token for revocation pairing
         self._token_pairs: dict[str, str] = {}
+        self.google_client_id = google_client_id
+        self.allowed_emails = frozenset(email.strip().lower() for email in allowed_emails if email.strip())
+        self._pending: dict[str, PendingSignIn] = {}
+        self._signing_keys: Optional[jwt.PyJWKClient] = None
 
         # Pre-register client if credentials are provided
         if self._locked:
@@ -158,7 +182,12 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         )
         if not client.client_id:
             raise AuthorizeError(error="invalid_request", error_description="Client has no client_id")
+        if self.google_client_id:
+            return self._start_google_sign_in(client, params)
+        return self._issue_code(client, params)
 
+    def _issue_code(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        """Store a fresh authorization code and return the client redirect that carries it."""
         code = secrets.token_urlsafe(32)
         now = time.time()
 
@@ -181,6 +210,38 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
             code=code,
             state=params.state,
         )
+
+    def _start_google_sign_in(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        """Park the request under a fresh state and send the browser to Google sign-in."""
+        now = time.time()
+        self._pending = {key: entry for key, entry in self._pending.items() if entry.expires_at > now}
+        state, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        self._pending[state] = PendingSignIn(client, params, nonce, now + _SIGN_IN_TTL)
+        log("OAuth Google sign-in started", {"client_id": client.client_id})
+        return sign_in_url(self.google_client_id, self.issuer_url.rstrip("/") + CALLBACK_PATH, state, nonce)
+
+    def finish_google_sign_in(self, state: str, id_token: str) -> str:
+        """The client redirect with a fresh code, once Google proves an allowed account for ``state``."""
+        pending = self._pending.pop(state, None)
+        if pending is None or pending.expires_at < time.time():
+            raise SignInRefused("sign-in request unknown or expired")
+        if self._signing_keys is None:
+            self._signing_keys = jwt.PyJWKClient(CERTS_URL)
+        email = verified_email(id_token, self.google_client_id, pending.nonce, self.allowed_emails, self._signing_keys)
+        log("OAuth Google sign-in accepted", {"email": email, "client_id": pending.client.client_id})
+        return self._issue_code(pending.client, pending.params)
+
+    async def google_callback(self, request: Request) -> Response:
+        """The endpoint Google posts the ID token to."""
+        form = await request.form()
+        try:
+            location = await anyio.to_thread.run_sync(
+                self.finish_google_sign_in, str(form.get("state", "")), str(form.get("id_token", ""))
+            )
+        except SignInRefused as exc:
+            log("OAuth Google sign-in refused", {"error": str(exc)})
+            return PlainTextResponse(f"Sign-in refused: {exc}", status_code=403)
+        return RedirectResponse(location, status_code=302)
 
     async def load_authorization_code(
         self,

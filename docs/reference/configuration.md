@@ -99,8 +99,12 @@ AgentiBridge supports OAuth 2.1 for MCP clients that require it (e.g., claude.ai
 | `OAUTH_CLIENT_SECRET` | _(none)_ | Pre-configured client secret. Required when `OAUTH_CLIENT_ID` is set |
 | `OAUTH_ALLOWED_REDIRECT_URIS` | _(none)_ | Comma-separated allowed redirect URIs for the pre-configured client |
 | `OAUTH_ALLOWED_SCOPES` | _(none)_ | Space-separated OAuth scopes the client may request (e.g., `claudeai`) |
+| `OAUTH_GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth web client ID. When set, `/authorize` requires a Google sign-in instead of approving on its own |
+| `OAUTH_ALLOWED_EMAILS` | _(none)_ | Comma-separated Google accounts allowed to sign in. Empty with a Google client ID means nobody can authorize |
 
 When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bearer tokens matching an API key are accepted.
+
+**Google sign-in.** With `OAUTH_GOOGLE_CLIENT_ID` set, `/authorize` sends the browser to Google (OpenID Connect, `response_type=id_token`, `response_mode=form_post`). Google posts the signed ID token to `<issuer>/oauth/google/callback`; the bridge checks its signature against Google's keys, the audience, the one-time nonce and a verified email in `OAUTH_ALLOWED_EMAILS`, then issues the authorization code. Any failed check returns 403. The Google client needs `<issuer>/oauth/google/callback` as an authorized redirect URI; its client secret is never used. Without `OAUTH_GOOGLE_CLIENT_ID` every authorization request is approved, so anyone who can reach the issuer can obtain a token.
 
 ### Dispatch Configuration (Phase 4)
 

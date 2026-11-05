@@ -31,12 +31,18 @@ import json
 import os
 from functools import partial
 import sys
-from typing import Dict
+from typing import TYPE_CHECKING, Dict
 
 import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
+from agentibridge.google_signin import CALLBACK_PATH
 from agentibridge.logging import log
+
+if TYPE_CHECKING:
+    from mcp.server.auth.settings import AuthSettings
+
+    from agentibridge.oauth_provider import BridgeOAuthProvider
 
 _SUMMARY_TRUNCATE_LENGTH = 200
 
@@ -46,7 +52,7 @@ _SUMMARY_TRUNCATE_LENGTH = 200
 # =============================================================================
 
 
-def _build_oauth_config():
+def _build_oauth_config() -> "tuple[BridgeOAuthProvider | None, AuthSettings | None]":
     """Build OAuth provider + settings if OAUTH_ISSUER_URL is set."""
     issuer = os.getenv("OAUTH_ISSUER_URL")
     if not issuer:
@@ -67,7 +73,11 @@ def _build_oauth_config():
         issuer_url=issuer,
         client_id=client_id,
         client_secret=client_secret,
+        google_client_id=os.getenv("OAUTH_GOOGLE_CLIENT_ID", ""),
+        allowed_emails=os.getenv("OAUTH_ALLOWED_EMAILS", "").split(","),
     )
+    if not provider.google_client_id:
+        print("WARNING: OAuth authorization is auto-approved; set OAUTH_GOOGLE_CLIENT_ID", file=sys.stderr)
 
     # Always enable registration — claude.ai requires it to work.
     # The provider returns pre-configured creds when locked.
@@ -101,6 +111,9 @@ mcp = FastMCP(
     auth_server_provider=_oauth_provider,
     auth=_oauth_settings,
 )
+
+if _oauth_provider is not None and _oauth_provider.google_client_id:
+    mcp.custom_route(CALLBACK_PATH, methods=["POST"])(_oauth_provider.google_callback)
 
 # Lazy singletons
 _store = None

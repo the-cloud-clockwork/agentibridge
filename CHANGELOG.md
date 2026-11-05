@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/dev/tcc-ecosystem`) running `agentihooks claude --route claude-ai` with
   Remote Control on, so claude.ai/code can chat with it. New settings
   `AGENTIBRIDGE_MASTER_DIR` and `AGENTIHOOKS_BINARY`.
+- **Google sign-in gate on OAuth authorization** — with `OAUTH_GOOGLE_CLIENT_ID`
+  set, `/authorize` sends the browser to Google and issues the code only after
+  `/oauth/google/callback` receives a Google-signed ID token for this client,
+  with the matching nonce and a verified email listed in
+  `OAUTH_ALLOWED_EMAILS`. Without it the server warns that authorization is
+  auto-approved. Adds the `pyjwt[crypto]` dependency.
 
 ### Removed
 

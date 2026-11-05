@@ -22,6 +22,7 @@ import os
 import sys
 from typing import List, Optional
 
+from agentibridge.google_signin import CALLBACK_PATH
 from agentibridge.logging import log
 
 
@@ -59,7 +60,7 @@ def validate_api_key(key: Optional[str]) -> bool:
 _PUBLIC_PATHS = frozenset({"/health"})
 
 # OAuth endpoint paths that must be publicly accessible.
-_OAUTH_PUBLIC_PATHS = frozenset({"/authorize", "/token", "/register", "/revoke"})
+_OAUTH_PUBLIC_PATHS = frozenset({"/authorize", "/token", "/register", "/revoke", CALLBACK_PATH})
 
 
 def _is_oauth_public_path(path: str) -> bool:
