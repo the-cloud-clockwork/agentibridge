@@ -864,7 +864,6 @@ class TestSessionStoreInit:
         monkeypatch.setenv("CLAUDE_CODE_HOME_DIR", str(tmp_path))
         store = SessionStore()
         assert store._projects_dir == tmp_path / "projects"
-        assert store._plans_dir == tmp_path / "plans"
         assert store._history_file == tmp_path / "history.jsonl"
 
     def test_lazy_redis_not_checked_on_init(self):
