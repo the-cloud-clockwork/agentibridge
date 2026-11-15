@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-15
+
 ### Added
 
 - **`init-interactive-agent` MCP tool** — starts a master agent: `agentihooks
@@ -19,13 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/oauth/google/callback` receives a Google-signed ID token for this client,
   with the matching nonce and a verified email listed in
   `OAUTH_ALLOWED_EMAILS`. Without it the server warns that authorization is
-  auto-approved. Adds the `pyjwt[crypto]` dependency.
+  auto-approved. The sign-in is bound to the browser that started it: the
+  `/oauth/google/start` page sets a cookie the callback must return. Adds the
+  `pyjwt[crypto]` dependency.
 - **`run_command` MCP tool** — runs one bash or PowerShell (`pwsh`, or
   `powershell.exe` on Windows and WSL) command on the bridge host and returns
   its exit code, stdout and stderr. stdin is closed, the environment is an
   allowlist without bridge settings, each stream is capped at 64 KiB, and the
-  whole process group is killed at `timeout` (max 600 s). The host preflight
-  (OS, distribution, kernel, WSL, shells) is in the tool description.
+  whole process group is killed when the command exits or hits `timeout`
+  (max 600 s). The host preflight (OS, distribution, kernel, WSL, shells) is in
+  the tool description. Served only with `AGENTIBRIDGE_RUN_COMMAND_ENABLED=true`,
+  never while OAuth is on without Google sign-in, and without OAuth only on
+  stdio or with `AGENTIBRIDGE_API_KEYS` set.
 
 ### Removed
 
@@ -190,6 +197,7 @@ whether or not a session is already running in them.
 - GitHub Actions CI/CD (test, build, publish, release)
 - PyPI package publishing
 
+[2.0.0]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v1.0.0...v2.0.0
 [0.10.0]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.9.0...v0.10.0
 [0.7.0]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.6.1...v0.7.0
 [0.2.1]: https://github.com/The-Cloud-Clockwork/agentibridge/compare/v0.2.0...v0.2.1
