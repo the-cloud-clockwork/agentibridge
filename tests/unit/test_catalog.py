@@ -8,14 +8,10 @@ import pytest
 from agentibridge.catalog import (
     HistoryEntry,
     MemoryFile,
-    PlanFile,
-    _parse_plan_filename,
     parse_history,
-    read_plan_content,
     scan_memory_files,
-    scan_plans_dir,
 )
-from tests.conftest import make_history_entry, make_memory_file, make_plan_file
+from tests.conftest import make_history_entry, make_memory_file
 
 
 # ---------------------------------------------------------------------------
@@ -45,44 +41,6 @@ class TestMemoryFile:
 
 
 # ---------------------------------------------------------------------------
-# Tests: PlanFile dataclass
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestPlanFile:
-    def test_to_dict_from_dict_roundtrip(self):
-        plan = make_plan_file()
-        d = plan.to_dict()
-        restored = PlanFile.from_dict(d)
-        assert restored == plan
-
-    def test_from_dict_coerces_types(self):
-        d = make_plan_file().to_dict()
-        d["file_size_bytes"] = "4096"
-        d["is_agent_plan"] = "true"
-        d["session_ids"] = '["s1", "s2"]'
-        restored = PlanFile.from_dict(d)
-        assert restored.file_size_bytes == 4096
-        assert restored.is_agent_plan is True
-        assert restored.session_ids == ["s1", "s2"]
-
-    def test_agent_plan_detection(self):
-        plan = make_plan_file(
-            codename="fancy-coding-parrot-agent-a1b2c3d",
-            is_agent_plan=True,
-            parent_codename="fancy-coding-parrot",
-        )
-        assert plan.is_agent_plan is True
-        assert plan.parent_codename == "fancy-coding-parrot"
-
-    def test_main_plan(self):
-        plan = make_plan_file()
-        assert plan.is_agent_plan is False
-        assert plan.parent_codename == "fancy-coding-parrot"
-
-
-# ---------------------------------------------------------------------------
 # Tests: HistoryEntry dataclass
 # ---------------------------------------------------------------------------
 
@@ -100,35 +58,6 @@ class TestHistoryEntry:
         d["extra"] = "value"
         restored = HistoryEntry.from_dict(d)
         assert restored.display == "Help me create a Docker Compose setup"
-
-
-# ---------------------------------------------------------------------------
-# Tests: _parse_plan_filename
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestParsePlanFilename:
-    def test_main_plan(self):
-        is_agent, parent = _parse_plan_filename("fancy-coding-parrot")
-        assert is_agent is False
-        assert parent == "fancy-coding-parrot"
-
-    def test_agent_plan(self):
-        is_agent, parent = _parse_plan_filename("fancy-coding-parrot-agent-a1b2c3d")
-        assert is_agent is True
-        assert parent == "fancy-coding-parrot"
-
-    def test_agent_plan_long_hash(self):
-        is_agent, parent = _parse_plan_filename("cool-fish-agent-deadbeef1234")
-        assert is_agent is True
-        assert parent == "cool-fish"
-
-    def test_plan_with_agent_in_name_but_not_suffix(self):
-        # A plan with "agent" in the middle but not the agent pattern
-        is_agent, parent = _parse_plan_filename("my-agent-tool")
-        assert is_agent is False
-        assert parent == "my-agent-tool"
 
 
 # ---------------------------------------------------------------------------
@@ -180,66 +109,6 @@ class TestScanMemoryFiles:
         for r in results:
             assert r.last_modified  # non-empty ISO timestamp
             assert "T" in r.last_modified
-
-
-# ---------------------------------------------------------------------------
-# Tests: scan_plans_dir
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestScanPlansDir:
-    def test_scans_fixture_dir(self, temp_plans_dir):
-        results = scan_plans_dir(temp_plans_dir)
-        assert len(results) == 3
-
-    def test_detects_agent_plans(self, temp_plans_dir):
-        results = scan_plans_dir(temp_plans_dir)
-        agents = [p for p in results if p.is_agent_plan]
-        assert len(agents) == 1
-        assert agents[0].codename == "fancy-coding-parrot-agent-a1b2c3d"
-        assert agents[0].parent_codename == "fancy-coding-parrot"
-
-    def test_main_plans(self, temp_plans_dir):
-        results = scan_plans_dir(temp_plans_dir)
-        mains = [p for p in results if not p.is_agent_plan]
-        assert len(mains) == 2
-        codenames = {p.codename for p in mains}
-        assert "fancy-coding-parrot" in codenames
-        assert "cool-jumping-fish" in codenames
-
-    def test_content_not_loaded(self, temp_plans_dir):
-        results = scan_plans_dir(temp_plans_dir)
-        for p in results:
-            assert p.content == ""
-
-    def test_empty_dir(self, tmp_path):
-        results = scan_plans_dir(tmp_path)
-        assert results == []
-
-    def test_nonexistent_dir(self):
-        results = scan_plans_dir(Path("/nonexistent/dir"))
-        assert results == []
-
-
-# ---------------------------------------------------------------------------
-# Tests: read_plan_content
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestReadPlanContent:
-    def test_reads_content(self, temp_plans_dir):
-        content = read_plan_content(temp_plans_dir / "fancy-coding-parrot.md")
-        assert "# Plan: Fancy Coding Parrot" in content
-
-    def test_truncates_at_max(self, temp_plans_dir):
-        content = read_plan_content(temp_plans_dir / "fancy-coding-parrot.md", max_bytes=10)
-        assert len(content) == 10
-
-    def test_nonexistent_returns_empty(self):
-        content = read_plan_content(Path("/nonexistent/file.md"))
-        assert content == ""
 
 
 # ---------------------------------------------------------------------------

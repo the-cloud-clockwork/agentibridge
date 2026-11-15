@@ -420,13 +420,12 @@ def find_agents(capability: str) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def _route_to_local_agent(agent_id: str, task: str, *, wait: bool = False) -> dict:
+async def _route_to_local_agent(agent_id: str, task: str) -> dict:
     """Deliver a task to a local agent by spawning a fresh ``claude`` in its dir.
 
-    ``wait=False`` (default) fire-and-forgets via ``dispatch_task`` and returns a
-    job_id immediately. ``wait=True`` blocks via ``run_claude`` until the run
-    completes and returns its result. Cold-start is always allowed here (liveness
-    is advisory), but two guards are NOT optional:
+    Always runs via ``run_claude`` to completion and returns its result —
+    there is no background job id to poll. Cold-start is always allowed here
+    (liveness is advisory), but two guards are NOT optional:
 
     - Hard-gated on ``AGENTIBRIDGE_LOCAL_AGENTS_ENABLED`` — a persisted
       ``transport=local`` card cannot enable dispatch while the feature is off.
@@ -457,26 +456,20 @@ async def _route_to_local_agent(agent_id: str, task: str, *, wait: bool = False)
         return {"success": False, "error": f"local agent has no valid package_path: {agent_id}", "agent_id": agent_id}
 
     try:
-        if wait:
-            from agentibridge.claude_runner import run_claude
+        from agentibridge.claude_runner import run_claude
 
-            timeout_s = int(float(os.getenv("AGENTIBRIDGE_AGENT_TIMEOUT", "600")))
-            res = await run_claude(prompt=task, cwd=package_path, timeout=timeout_s)
-            return {
-                "success": res.success,
-                "agent_id": agent_id,
-                "transport": "local",
-                "package_path": package_path,
-                "result": res.result,
-                "session_id": res.session_id,
-                "timed_out": res.timed_out,
-                "error": res.error,
-            }
-
-        from agentibridge.dispatch import dispatch_task
-
-        result = await dispatch_task(task_description=task, project=package_path)
-        return {"success": True, "agent_id": agent_id, "transport": "local", "package_path": package_path, **result}
+        timeout_s = int(float(os.getenv("AGENTIBRIDGE_AGENT_TIMEOUT", "600")))
+        res = await run_claude(prompt=task, cwd=package_path, timeout=timeout_s)
+        return {
+            "success": res.success,
+            "agent_id": agent_id,
+            "transport": "local",
+            "package_path": package_path,
+            "result": res.result,
+            "session_id": res.session_id,
+            "timed_out": res.timed_out,
+            "error": res.error,
+        }
     except Exception as e:
         log("registry: local dispatch failed", {"agent_id": agent_id, "error": str(e)})
         return {"success": False, "error": str(e), "agent_id": agent_id}
@@ -501,7 +494,7 @@ async def route_to_agent(
     # dir. A cold start is always allowed, so we branch BEFORE the online /
     # capacity / endpoint checks below — liveness is advisory for discovery only.
     if agent.get("transport") == "local":
-        return await _route_to_local_agent(agent_id, task, wait=wait)
+        return await _route_to_local_agent(agent_id, task)
 
     if agent.get("effective_status") != "online":
         return {"success": False, "error": f"agent offline: {agent_id}"}

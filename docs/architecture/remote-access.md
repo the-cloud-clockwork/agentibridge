@@ -66,7 +66,7 @@ When no keys are configured, auth is disabled (open access).
 
 ### Authentication — OAuth 2.1 (Optional)
 
-Set `OAUTH_ISSUER_URL` to enable an in-memory OAuth 2.1 authorization server. This is required by some clients (e.g., claude.ai) that use the MCP OAuth flow. API key auth continues to work alongside OAuth — both methods are active simultaneously.
+Set `OAUTH_ISSUER_URL` to enable an in-memory OAuth 2.1 authorization server. Set `OAUTH_GOOGLE_CLIENT_ID` and `OAUTH_ALLOWED_EMAILS` so that authorization requires a Google sign-in from a listed account (see the [Configuration Reference](../reference/configuration.md)); without them every authorization request is approved. This is required by some clients (e.g., claude.ai) that use the MCP OAuth flow. API key auth continues to work alongside OAuth — both methods are active simultaneously.
 
 Uncomment and set these in `~/.agentibridge/agentibridge.env`:
 

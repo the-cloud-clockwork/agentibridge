@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -344,9 +344,9 @@ class TestRemoveTools:
 
         # Verify tool exists before removal
         tool_names_before = [t.name for t in srv.mcp._tool_manager.list_tools()]
-        assert "dispatch_task" in tool_names_before
+        assert "restore_session" in tool_names_before
 
-        with patch.dict("os.environ", {"AGENTIBRIDGE_REMOVE_TOOLS": "dispatch_task,search_semantic"}):
+        with patch.dict("os.environ", {"AGENTIBRIDGE_REMOVE_TOOLS": "restore_session,search_semantic"}):
             # Re-import to pick up the new env var
             import importlib
             import agentibridge.config
@@ -363,7 +363,7 @@ class TestRemoveTools:
                     pass
 
             tool_names_after = [t.name for t in srv.mcp._tool_manager.list_tools()]
-            assert "dispatch_task" not in tool_names_after
+            assert "restore_session" not in tool_names_after
             assert "search_semantic" not in tool_names_after
             # Other tools should still be present
             assert "list_sessions" in tool_names_after
@@ -417,26 +417,42 @@ class TestRemoveTools:
 
 
 @pytest.mark.unit
-class TestDispatchTask:
-    def test_success(self, reset_singletons):
-        import agentibridge.server as srv
+class TestRunCommandGate:
+    @pytest.mark.parametrize(
+        ("enabled", "provider", "authenticated", "served"),
+        [
+            (False, None, True, False),
+            (True, None, True, True),
+            (True, None, False, False),
+            (True, MagicMock(google_client_id=""), True, False),
+            (True, MagicMock(google_client_id="google-client"), False, True),
+            (False, MagicMock(google_client_id="google-client"), True, False),
+        ],
+        ids=["disabled", "api-keys", "open-http", "auto-approved-oauth", "google-sign-in", "disabled-with-google"],
+    )
+    def test_served_only_when_enabled_and_every_caller_authenticates(
+        self, enabled: bool, provider: MagicMock | None, authenticated: bool, served: bool
+    ) -> None:
+        from agentibridge.server import run_command_allowed
 
-        srv._store = MagicMock()
-        srv._collector = _mock_collector()
+        assert run_command_allowed(enabled, provider, authenticated) is served
 
-        with patch("agentibridge.dispatch.dispatch_task", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = {
-                "dispatched": True,
-                "completed": True,
-                "exit_code": 0,
-                "duration_ms": 1000,
-                "timed_out": False,
-                "output": {"result": "done"},
-                "error": None,
-                "context_session": None,
-                "prompt_length": 100,
-            }
+    @pytest.mark.parametrize(
+        ("transport", "keys", "authenticated"),
+        [("stdio", "", True), ("sse", "", False), ("sse", "key-1", True)],
+        ids=["stdio", "sse-open", "sse-keys"],
+    )
+    def test_callers_authenticate_on_stdio_or_with_api_keys(
+        self, monkeypatch: pytest.MonkeyPatch, transport: str, keys: str, authenticated: bool
+    ) -> None:
+        from agentibridge.server import _callers_authenticated
 
-            result = json.loads(asyncio.run(srv.dispatch_task(task_description="Fix bug")))
-            assert result["success"] is True
-            assert result["dispatched"] is True
+        monkeypatch.setenv("AGENTIBRIDGE_TRANSPORT", transport)
+        monkeypatch.setenv("AGENTIBRIDGE_API_KEYS", keys)
+
+        assert _callers_authenticated() is authenticated
+
+    def test_disabled_by_default(self) -> None:
+        from agentibridge.server import mcp
+
+        assert "run_command" not in {tool.name for tool in mcp._tool_manager.list_tools()}

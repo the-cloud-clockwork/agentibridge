@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`init-interactive-agent` MCP tool** — starts a master agent: `agentihooks
+  init-agent` opens a herdr tab in `AGENTIBRIDGE_MASTER_DIR` (default
+  `~/dev/tcc-ecosystem`) running `agentihooks claude --route claude-ai` with
+  Remote Control on, so claude.ai/code can chat with it. New settings
+  `AGENTIBRIDGE_MASTER_DIR` and `AGENTIHOOKS_BINARY`.
+- **Google sign-in gate on OAuth authorization** — with `OAUTH_GOOGLE_CLIENT_ID`
+  set, `/authorize` sends the browser to Google and issues the code only after
+  `/oauth/google/callback` receives a Google-signed ID token for this client,
+  with the matching nonce and a verified email listed in
+  `OAUTH_ALLOWED_EMAILS`. Without it the server warns that authorization is
+  auto-approved. Adds the `pyjwt[crypto]` dependency.
+- **`run_command` MCP tool** — runs one bash or PowerShell (`pwsh`, or
+  `powershell.exe` on Windows and WSL) command on the bridge host and returns
+  its exit code, stdout and stderr. stdin is closed, the environment is an
+  allowlist without bridge settings, each stream is capped at 64 KiB, and the
+  whole process group is killed at `timeout` (max 600 s). The host preflight
+  (OS, distribution, kernel, WSL, shells) is in the tool description.
+
+### Removed
+
+- **Dispatch job, plan, handoff and plan-catalog tools** — `dispatch_task`,
+  `get_dispatch_job`, `list_dispatch_jobs`, `plan_task`, `get_dispatch_plan`,
+  `list_dispatch_plans`, `execute_plan`, `list_handoff_projects`, `handoff`,
+  `list_plans`, `get_plan`. The fire-and-forget job queue (`dispatch.py`), the
+  plan-then-execute store (`plans.py`), the plan catalog scan and its
+  codename→session index, and the project discovery helpers they used
+  (`list_projects`, `resolve_project`) go with them. `restore_session` and the
+  rest of the knowledge catalog (`list_memory_files`, `get_memory_file`,
+  `search_history`) are unaffected. Local agents routed through `run_agent` /
+  `dispatch_to_agent` now always run to completion via `run_claude`, whatever
+  `wait` is set to — there is no longer a background job id to poll.
+
 ## [1.0.0] - 2026-09-08
 
 ### Removed

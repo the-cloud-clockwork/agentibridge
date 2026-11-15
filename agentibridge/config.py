@@ -1,6 +1,7 @@
 """Configuration for agentibridge."""
 
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -126,15 +127,11 @@ OAUTH_ALLOWED_SCOPES = os.getenv("OAUTH_ALLOWED_SCOPES", "")
 # AGENTIBRIDGE — KNOWLEDGE CATALOG (Phase 5)
 # =============================================================================
 
-AGENTIBRIDGE_PLANS_DIR = str(Path(CLAUDE_CODE_HOME_DIR) / "plans")
-
 AGENTIBRIDGE_HISTORY_FILE = str(Path(CLAUDE_CODE_HOME_DIR) / "history.jsonl")
 
 AGENTIBRIDGE_MAX_HISTORY_ENTRIES = _env_int("AGENTIBRIDGE_MAX_HISTORY_ENTRIES", "5000", min_val=0)
 
 AGENTIBRIDGE_MAX_MEMORY_CONTENT = _env_int("AGENTIBRIDGE_MAX_MEMORY_CONTENT", "51200", min_val=1024)
-
-AGENTIBRIDGE_MAX_PLAN_CONTENT = _env_int("AGENTIBRIDGE_MAX_PLAN_CONTENT", "102400", min_val=1024)
 
 # =============================================================================
 # AGENTIBRIDGE — LOCAL AGENTS (Phase 6)
@@ -150,6 +147,8 @@ AGENTIBRIDGE_MAX_PLAN_CONTENT = _env_int("AGENTIBRIDGE_MAX_PLAN_CONTENT", "10240
 # deployments see no behavior change until this is explicitly enabled.
 AGENTIBRIDGE_LOCAL_AGENTS_ENABLED = _env_bool("AGENTIBRIDGE_LOCAL_AGENTS_ENABLED", "false")
 
+AGENTIBRIDGE_RUN_COMMAND_ENABLED = _env_bool("AGENTIBRIDGE_RUN_COMMAND_ENABLED", "false")
+
 # AgentiHub checkout root (contains an ``agents/`` subdir). Empty = auto-resolve
 # via sibling-directory discovery. Same "empty means unset" convention as
 # OAUTH_ISSUER_URL — no universal default location, so never guessed here.
@@ -158,3 +157,11 @@ AGENTIHUB_DIR = os.getenv("AGENTIHUB_DIR", "")
 # Freshness window (seconds) for calling a local agent "online": a package is
 # online only if a claude session in its dir was active within this window.
 AGENTIBRIDGE_LOCAL_SESSION_TTL = _env_int("AGENTIBRIDGE_LOCAL_SESSION_TTL", "3600", min_val=1)
+
+AGENTIBRIDGE_MASTER_DIR = os.getenv("AGENTIBRIDGE_MASTER_DIR") or str(Path.home() / "dev" / "tcc-ecosystem")
+
+AGENTIHOOKS_BINARY = (
+    os.getenv("AGENTIHOOKS_BINARY")
+    or shutil.which("agentihooks")
+    or str(Path.home() / ".local" / "bin" / "agentihooks")
+)

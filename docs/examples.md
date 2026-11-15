@@ -32,13 +32,6 @@ The `list_sessions` tool returns sessions across all projects with metadata — 
 The same tools work from claude.ai via the remote HTTP transport. Connect once with OAuth 2.1, then query your sessions from any browser.
 {: .text-grey-dk-100 }
 
-### `list_plans` — Plan catalog
-
-![claude.ai list_plans showing 5 plans with codenames and dates]({{ '/docs/media/examples/claude-ai-list-plans.jpg' | relative_url }}){: .d-block .mx-auto .mb-4 }
-
-Browse implementation plans across all projects. Each plan has a unique codename and links back to the session that created it.
-{: .text-grey-dk-100 }
-
 ### `list_memory_files` — Memory catalog
 
 ![claude.ai list_memory_files showing 10 memory files across projects]({{ '/docs/media/examples/claude-ai-memory-files.jpg' | relative_url }}){: .d-block .mx-auto .mb-4 }

@@ -81,9 +81,9 @@ AgentiBridge works from Claude Code CLI, claude.ai, ChatGPT, and any MCP client.
     <p><code>agentibridge search "&lt;q&gt;"</code> spawns a headless Opus one-shot that reasons over your sessions, history, memory, and git — streams live progress, returns a human-readable summary.</p>
   </div>
   <div class="feature-card">
-    <img src="{{ '/assets/images/feature-dispatch.svg' | relative_url }}" alt="Background Dispatch &amp; Handoff" class="feature-icon">
-    <h3>Dispatch + Handoff</h3>
-    <p>Fire-and-forget task dispatch with session restore. Seed a fresh conversation in any project with structured context. Resume work where you left off, from any device.</p>
+    <img src="{{ '/assets/images/feature-dispatch.svg' | relative_url }}" alt="Session Restore" class="feature-icon">
+    <h3>Session Restore</h3>
+    <p>Load the context of a past session to seed a new conversation. Resume work where you left off, from any device.</p>
   </div>
   <div class="feature-card">
     <img src="{{ '/assets/images/feature-security.svg' | relative_url }}" alt="Security First" class="feature-icon">
@@ -193,16 +193,11 @@ That's it. Your Claude Code sessions are now searchable from any MCP-compatible 
 | `generate_summary` | Auto-generate session summary via LLM |
 | `agent_search` | Agentic recon — spawn headless Opus one-shot, return structured matches |
 
-### Dispatch + Handoff
+### Write-back
 
 | Tool | What it does |
 |:-----|:-------------|
 | `restore_session` | Load session context for continuation |
-| `dispatch_task` | Fire-and-forget background job dispatch |
-| `get_dispatch_job` | Poll a background job for status and output |
-| `list_dispatch_jobs` | List recent dispatch jobs, filterable by status |
-| `plan_task` / `execute_plan` / `get_dispatch_plan` / `list_dispatch_plans` | Plan-first workflows for longer tasks |
-| `list_handoff_projects` / `handoff` | Seed a conversation in another project with structured context |
 
 ### Knowledge Catalog
 
@@ -210,8 +205,6 @@ That's it. Your Claude Code sessions are now searchable from any MCP-compatible 
 |:-----|:-------------|
 | `list_memory_files` | List memory files across projects |
 | `get_memory_file` | Read a specific memory file |
-| `list_plans` | List plans sorted by recency |
-| `get_plan` | Read a plan by codename |
 | `search_history` | Search the global prompt history |
 
 ### Agent-to-Agent Registry

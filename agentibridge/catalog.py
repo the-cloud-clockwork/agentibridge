@@ -1,12 +1,11 @@
-"""Knowledge catalog — Memory files, Plans, and History.
+"""Knowledge catalog — Memory files and History.
 
-Pure data models and filesystem scanning functions for the three new
+Pure data models and filesystem scanning functions for these two
 knowledge categories. No Redis, no store — just dataclasses and reads.
 """
 
 import json
-import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
@@ -41,36 +40,6 @@ class MemoryFile:
 
 
 @dataclass
-class PlanFile:
-    codename: str  # "fancy-snuggling-pike"
-    filename: str  # "fancy-snuggling-pike.md"
-    filepath: str  # absolute path
-    content: str  # full markdown (truncated at max_content)
-    file_size_bytes: int
-    last_modified: str  # ISO timestamp from mtime
-    is_agent_plan: bool  # True for "{codename}-agent-{hash}.md"
-    parent_codename: str  # Base codename (strips "-agent-{hash}" suffix)
-    session_ids: List[str] = field(default_factory=list)
-    project_path: str = ""  # Resolved from slug index (first match, or "")
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        d["session_ids"] = list(self.session_ids)
-        return d
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "PlanFile":
-        data = dict(data)
-        if isinstance(data.get("file_size_bytes"), str):
-            data["file_size_bytes"] = int(data["file_size_bytes"])
-        if isinstance(data.get("is_agent_plan"), str):
-            data["is_agent_plan"] = data["is_agent_plan"].lower() == "true"
-        if isinstance(data.get("session_ids"), str):
-            data["session_ids"] = json.loads(data["session_ids"])
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})  # NOSONAR
-
-
-@dataclass
 class HistoryEntry:
     display: str  # User prompt text
     timestamp: str  # ISO timestamp (converted from epoch ms)
@@ -87,122 +56,8 @@ class HistoryEntry:
 
 
 # ---------------------------------------------------------------------------
-# Agent plan detection pattern: "{codename}-agent-{hex_hash}.md"
-# ---------------------------------------------------------------------------
-
-_AGENT_PLAN_RE = re.compile(r"^(.+)-agent-([0-9a-f]+)$")
-
-
-def _parse_plan_filename(stem: str) -> Tuple[bool, str]:
-    """Parse a plan filename stem into (is_agent_plan, parent_codename).
-
-    Returns (False, stem) for main plans, (True, parent) for agent plans.
-    """
-    m = _AGENT_PLAN_RE.match(stem)
-    if m:
-        return True, m.group(1)
-    return False, stem
-
-
-# ---------------------------------------------------------------------------
 # Scanning functions
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class ProjectInfo:
-    encoded: str  # "-home-iamroot-dev-tcc-ecosystem-agenticore"
-    path: str  # "/home/iamroot/dev/tcc-ecosystem/agenticore"
-    name: str  # "agenticore"
-    session_count: int  # number of .jsonl files
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-def list_projects(base_dir: Path) -> List[ProjectInfo]:
-    """List all projects with decoded paths and session counts."""
-    base_dir = Path(base_dir)
-    if not base_dir.exists():
-        return []
-
-    results: List[ProjectInfo] = []
-    for project_dir in sorted(base_dir.iterdir()):
-        if not project_dir.is_dir():
-            continue
-        encoded = project_dir.name
-        decoded = _real_path(encoded)
-        name = Path(decoded).name
-        session_count = sum(1 for _ in project_dir.glob("*.jsonl"))
-        results.append(
-            ProjectInfo(
-                encoded=encoded,
-                path=decoded,
-                name=name,
-                session_count=session_count,
-            )
-        )
-    return results
-
-
-def _real_path(encoded: str) -> str:
-    """Try to find the real filesystem path for an encoded project name.
-
-    decode_project_path is lossy (hyphens in real paths become slashes).
-    If the decoded path doesn't exist, walk from root rebuilding with hyphens.
-    """
-    decoded = decode_project_path(encoded)
-    if Path(decoded).exists():
-        return decoded
-
-    # Rebuild: try joining segments with hyphens where dirs don't exist
-    parts = decoded.strip("/").split("/")
-    current = Path("/")
-    i = 0
-    while i < len(parts):
-        candidate = current / parts[i]
-        if candidate.exists():
-            current = candidate
-            i += 1
-        else:
-            # Try joining with next segment via hyphen
-            merged = False
-            for j in range(i + 1, min(i + 5, len(parts) + 1)):
-                hyphenated = "-".join(parts[i:j])
-                if (current / hyphenated).exists():
-                    current = current / hyphenated
-                    i = j
-                    merged = True
-                    break
-            if not merged:
-                # Give up, return decoded as-is
-                return decoded
-    return str(current)
-
-
-def resolve_project(base_dir: Path, query: str) -> ProjectInfo | None:
-    """Fuzzy-match a project by name, path substring, or encoded name."""
-    projects = list_projects(base_dir)
-    if not projects:
-        return None
-
-    # Exact path match
-    for p in projects:
-        if p.path == query or p.encoded == query:
-            return p
-
-    # Name match (case-insensitive)
-    q = query.lower().replace("-", "").replace("_", "")
-    for p in projects:
-        if p.name.lower().replace("-", "").replace("_", "") == q:
-            return p
-
-    # Substring match
-    for p in projects:
-        if q in p.path.lower() or q in p.encoded.lower():
-            return p
-
-    return None
 
 
 def scan_memory_files(base_dir: Path, max_content: int = 51200) -> List[MemoryFile]:
@@ -253,66 +108,6 @@ def scan_memory_files(base_dir: Path, max_content: int = 51200) -> List[MemoryFi
                 continue
 
     return results
-
-
-def scan_plans_dir(plans_dir: Path) -> List[PlanFile]:
-    """Scan {plans_dir}/*.md for plan files (metadata only, no content).
-
-    Args:
-        plans_dir: The plans directory (e.g. ~/.claude/plans/)
-
-    Returns:
-        List of PlanFile objects with content="" (loaded on demand).
-    """
-    plans_dir = Path(plans_dir)
-    if not plans_dir.exists():
-        return []
-
-    results: List[PlanFile] = []
-    for md_file in sorted(plans_dir.glob("*.md")):
-        if not md_file.is_file():
-            continue
-        try:
-            stat = md_file.stat()
-            stem = md_file.stem
-            is_agent, parent = _parse_plan_filename(stem)
-            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            results.append(
-                PlanFile(
-                    codename=stem,
-                    filename=md_file.name,
-                    filepath=str(md_file),
-                    content="",  # metadata only — loaded on demand
-                    file_size_bytes=stat.st_size,
-                    last_modified=mtime,
-                    is_agent_plan=is_agent,
-                    parent_codename=parent,
-                )
-            )
-        except OSError:
-            continue
-
-    return results
-
-
-def read_plan_content(filepath: Path, max_bytes: int = 102400) -> str:
-    """Read plan markdown content, truncated at max_bytes.
-
-    Args:
-        filepath: Absolute path to the plan .md file
-        max_bytes: Maximum bytes to read
-
-    Returns:
-        Plan markdown content as string.
-    """
-    filepath = Path(filepath)
-    if not filepath.exists():
-        return ""
-    try:
-        raw = filepath.read_bytes()[:max_bytes]
-        return raw.decode("utf-8", errors="replace")
-    except OSError:
-        return ""
 
 
 def parse_history(

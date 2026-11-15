@@ -61,7 +61,7 @@ AgentiBridge has two run modes that can run simultaneously without conflict:
 |----------|---------|-------------|
 | `AGENTIBRIDGE_POLL_INTERVAL` | `60` | How often the collector scans for new transcript data (seconds). Minimum: 5 |
 | `AGENTIBRIDGE_MAX_ENTRIES` | `500` | Maximum transcript entries to store per session in Redis. `0` = unlimited (use with caution) |
-| `CLAUDE_CODE_HOME_DIR` | `~/.claude` | Claude Code home directory. All paths (projects, plans, history, memory) derive from this |
+| `CLAUDE_CODE_HOME_DIR` | `~/.claude` | Claude Code home directory. All paths (projects, history, memory) derive from this |
 
 ### Storage — Postgres + pgvector (semantic search)
 
@@ -99,8 +99,12 @@ AgentiBridge supports OAuth 2.1 for MCP clients that require it (e.g., claude.ai
 | `OAUTH_CLIENT_SECRET` | _(none)_ | Pre-configured client secret. Required when `OAUTH_CLIENT_ID` is set |
 | `OAUTH_ALLOWED_REDIRECT_URIS` | _(none)_ | Comma-separated allowed redirect URIs for the pre-configured client |
 | `OAUTH_ALLOWED_SCOPES` | _(none)_ | Space-separated OAuth scopes the client may request (e.g., `claudeai`) |
+| `OAUTH_GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth web client ID. When set, `/authorize` requires a Google sign-in instead of approving on its own |
+| `OAUTH_ALLOWED_EMAILS` | _(none)_ | Comma-separated Google accounts allowed to sign in. Empty with a Google client ID means nobody can authorize |
 
 When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bearer tokens matching an API key are accepted.
+
+**Google sign-in.** With `OAUTH_GOOGLE_CLIENT_ID` set, `/authorize` sends the browser to Google (OpenID Connect, `response_type=id_token`, `response_mode=form_post`). Google posts the signed ID token to `<issuer>/oauth/google/callback`; the bridge checks its signature against Google's keys, the audience, the one-time nonce and a verified email in `OAUTH_ALLOWED_EMAILS`, then issues the authorization code. Any failed check returns 403. The Google client needs `<issuer>/oauth/google/callback` as an authorized redirect URI; its client secret is never used. Without `OAUTH_GOOGLE_CLIENT_ID` every authorization request is approved, so anyone who can reach the issuer can obtain a token.
 
 ### Dispatch Configuration (Phase 4)
 
@@ -120,17 +124,26 @@ When OAuth is enabled, `AGENTIBRIDGE_API_KEYS` still works as a fallback — Bea
 |----------|---------|-------------|
 | `AGENTIBRIDGE_MAX_HISTORY_ENTRIES` | `5000` | Maximum history entries to store in Redis. `0` = unlimited |
 | `AGENTIBRIDGE_MAX_MEMORY_CONTENT` | `51200` | Maximum bytes to read from a single memory file (50KB) |
-| `AGENTIBRIDGE_MAX_PLAN_CONTENT` | `102400` | Maximum bytes to read from a single plan file (100KB) |
 
 ### Local Agents Configuration (Phase 6)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AGENTIBRIDGE_LOCAL_AGENTS_ENABLED` | `false` | Master toggle for session-gated local agent discovery + dispatch. Must be explicitly set to `true` |
+| `AGENTIBRIDGE_RUN_COMMAND_ENABLED` | `false` | Serve the `run_command` tool. Ignored while OAuth is on without `OAUTH_GOOGLE_CLIENT_ID`, because authorization would be auto-approved |
 | `AGENTIHUB_DIR` | _(none)_ | AgentiHub checkout root containing `agents/`. Empty = auto-resolve by walking up for a sibling `agentihub/agents` directory |
 | `AGENTIBRIDGE_LOCAL_SESSION_TTL` | `3600` | Freshness window (seconds) for a local agent to count as "online" |
 
 **What enabling local agents does.** With the flag on, `list_agents` / `get_agent` / `find_agents` additionally scan `<AGENTIHUB_DIR>/agents/<name>/package/` for `CLAUDE.md` packages and merge them in transparently alongside registered HTTP agents — nothing is persisted to Redis or the file store, the catalog is computed fresh on every read. Each package's capability tags come from its `command.yml`. Liveness is session-gated, not heartbeat-gated: a package is `online` only while a live Claude session's working directory maps to it within `AGENTIBRIDGE_LOCAL_SESSION_TTL`, otherwise it's `idle`. Local agents are never `offline` — they are always callable, because dispatch cold-starts a fresh `claude` process in the package directory regardless of whether a session is currently live there.
+
+### Master Agents Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTIBRIDGE_MASTER_DIR` | `~/dev/tcc-ecosystem` | Directory `init-interactive-agent` opens master agents in |
+| `AGENTIHOOKS_BINARY` | `agentihooks` on `PATH`, else `~/.local/bin/agentihooks` | The agentihooks CLI that runs `init-agent` |
+
+**What a master agent is.** `init-interactive-agent` runs `agentihooks init-agent --agent claude --dir $AGENTIBRIDGE_MASTER_DIR --name <name> -- --route claude-ai --remote-control <name>`: a herdr tab with an interactive Claude Code session on a stored claude.ai login, reachable from claude.ai/code through Remote Control. The tool succeeds only when init-agent reports `route_status=routed`. A launch that times out (300 s) reports failure even when its herdr tab already opened; check herdr before retrying.
 
 ### Logging Configuration
 
@@ -255,10 +268,6 @@ All Redis keys follow the pattern: `{REDIS_KEY_PREFIX}:sb:{suffix}`
 - `{prefix}:sb:pos:{filepath_hash}` — String: byte offset for incremental transcript reading
 - `{prefix}:sb:memory:{project}:{filename}` — Hash: memory file metadata + content
 - `{prefix}:sb:idx:memory` — Sorted set: all memory file keys by last modified
-- `{prefix}:sb:plan:{codename}` — Hash: plan metadata + content
-- `{prefix}:sb:plan:{codename}:agents` — List: agent subplan codenames
-- `{prefix}:sb:idx:plans` — Sorted set: all plan codenames by last modified
-- `{prefix}:sb:codename:{slug}` — Set: session IDs linked to a plan codename
 - `{prefix}:sb:history` — List: JSON-serialized prompt history entries
 - `{prefix}:sb:pos:history` — String: byte offset for incremental history parsing
 

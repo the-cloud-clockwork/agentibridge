@@ -141,10 +141,12 @@ class TestRouteByCapability:
         monkeypatch.setattr("agentibridge.local_agents.filter_records", lambda recs, *a, **k: recs)
         monkeypatch.setattr("agentibridge.local_agents.get_local_agent", lambda agent_id, *a, **k: rec)
 
-        async def fake_dispatch(**k):
-            return {"dispatched": True, "job_id": "j1", "status": "running"}
+        from agentibridge.claude_runner import ClaudeResult
 
-        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+        async def fake_run(**k):
+            return ClaudeResult(success=True, result="done", session_id="cs-1")
+
+        monkeypatch.setattr("agentibridge.claude_runner.run_claude", fake_run)
 
         result = asyncio.run(route_by_capability("video-editing", "cut the intro"))
         assert result["success"] is True
@@ -175,10 +177,12 @@ class TestRouteByCapability:
             lambda agent_id, *a, **k: a_on if agent_id == "warm-agent" else a_off,
         )
 
-        async def fake_dispatch(**k):
-            return {"dispatched": True, "job_id": "j", "status": "running"}
+        from agentibridge.claude_runner import ClaudeResult
 
-        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+        async def fake_run(**k):
+            return ClaudeResult(success=True, result="done", session_id="cs-1")
+
+        monkeypatch.setattr("agentibridge.claude_runner.run_claude", fake_run)
 
         result = asyncio.run(route_by_capability("media", "task"))
         assert result["agent_id"] == "warm-agent"  # warm session wins
@@ -186,7 +190,9 @@ class TestRouteByCapability:
 
 @pytest.mark.unit
 class TestRouteToLocalAgent:
-    def test_local_dispatch_nowait(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
+    def test_local_dispatch_runs_to_completion_by_default(
+        self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch
+    ):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         monkeypatch.setattr(
@@ -194,21 +200,24 @@ class TestRouteToLocalAgent:
             lambda agent_id, *a, **k: _local_rec("loc", str(pkg)) if agent_id == "loc" else None,
         )
 
+        from agentibridge.claude_runner import ClaudeResult
+
         calls = {}
 
-        async def fake_dispatch(task_description="", project="", **k):
-            calls["task"] = task_description
-            calls["project"] = project
-            return {"dispatched": True, "job_id": "job-1", "status": "running"}
+        async def fake_run(prompt="", cwd="", **k):
+            calls["prompt"] = prompt
+            calls["cwd"] = cwd
+            return ClaudeResult(success=True, result="done", session_id="cs-1")
 
-        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+        monkeypatch.setattr("agentibridge.claude_runner.run_claude", fake_run)
 
         result = asyncio.run(route_to_agent("loc", "do the thing"))
         assert result["success"] is True
         assert result["transport"] == "local"
-        assert result["job_id"] == "job-1"
-        assert calls["project"] == str(pkg)
-        assert calls["task"] == "do the thing"
+        assert result["result"] == "done"
+        assert "job_id" not in result
+        assert calls["cwd"] == str(pkg)
+        assert calls["prompt"] == "do the thing"
 
     def test_cold_start_when_idle(self, temp_agents_dir, no_redis, tmp_path, enable_local, monkeypatch):
         # Direct dispatch must cold-start even when no live session (offline).
@@ -219,10 +228,12 @@ class TestRouteToLocalAgent:
             lambda agent_id, *a, **k: _local_rec("loc", str(pkg), status="idle"),
         )
 
-        async def fake_dispatch(**k):
-            return {"dispatched": True, "job_id": "j", "status": "running"}
+        from agentibridge.claude_runner import ClaudeResult
 
-        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+        async def fake_run(**k):
+            return ClaudeResult(success=True, result="done", session_id="cs-1")
+
+        monkeypatch.setattr("agentibridge.claude_runner.run_claude", fake_run)
         result = asyncio.run(route_to_agent("loc", "task"))
         assert result["success"] is True  # not blocked by offline effective_status
 
@@ -278,11 +289,13 @@ class TestRouteToLocalAgent:
 
         called = {"dispatch": False}
 
-        async def fake_dispatch(**k):
+        async def fake_run(**k):
             called["dispatch"] = True
-            return {"dispatched": True, "job_id": "j", "status": "running"}
+            from agentibridge.claude_runner import ClaudeResult
 
-        monkeypatch.setattr("agentibridge.dispatch.dispatch_task", fake_dispatch)
+            return ClaudeResult(success=True, result="done")
+
+        monkeypatch.setattr("agentibridge.claude_runner.run_claude", fake_run)
         result = asyncio.run(route_to_agent("x", "task"))
         assert result["success"] is False
         assert "no local agent package" in result["error"]

@@ -9,9 +9,15 @@ Activated when OAUTH_ISSUER_URL is set.
 
 import os
 import secrets
+import threading
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from typing import Optional
+from urllib.parse import parse_qs, urlencode
 
+import anyio.to_thread
+import jwt
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -22,13 +28,27 @@ from mcp.server.auth.provider import (
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse, RedirectResponse, Response
 
+from agentibridge.google_signin import (
+    CALLBACK_PATH,
+    CERTS_URL,
+    START_PATH,
+    SignInRefused,
+    sign_in_url,
+    verified_email,
+)
 from agentibridge.logging import log
 
 # Token TTLs
 _AUTH_CODE_TTL = 300  # 5 minutes
 _ACCESS_TOKEN_TTL = 3600  # 1 hour
 _REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 days
+_SIGN_IN_TTL = 600
+_MAX_PENDING_SIGN_INS = 64
+_MAX_CALLBACK_BODY = 16384
+_BINDING_COOKIE_PREFIX = "agentibridge_signin_"
 
 
 def _get_redirect_uris() -> list:
@@ -41,11 +61,28 @@ def _get_redirect_uris() -> list:
     return [AnyUrl(u.strip()) for u in raw.split(",") if u.strip()]
 
 
+def binding_cookie(state: str) -> str:
+    """The name of the cookie that binds a browser to the sign-in for ``state``."""
+    return _BINDING_COOKIE_PREFIX + state
+
+
+@dataclass(frozen=True)
+class PendingSignIn:
+    """An authorization request waiting for its Google sign-in."""
+
+    client: OAuthClientInformationFull
+    params: AuthorizationParams
+    nonce: str
+    expires_at: float
+    binding: str
+    started: bool = False
+
+
 class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
     """In-memory OAuth 2.1 provider for machine-to-machine bridge access.
 
-    Auto-approves authorization requests (no consent page needed for a
-    private bridge).
+    With a Google client ID, an authorization request waits for a Google
+    sign-in from an allowed account; without one it is auto-approved.
 
     When client_id/client_secret are pre-configured, dynamic registration
     returns the pre-configured credentials (claude.ai requires working
@@ -57,7 +94,9 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         issuer_url: str,
         client_id: str = "",
         client_secret: str = "",
-    ):
+        google_client_id: str = "",
+        allowed_emails: Iterable[str] = (),
+    ) -> None:
         self.issuer_url = issuer_url
         self._locked = bool(client_id and client_secret)
         # In-memory stores
@@ -67,6 +106,11 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_tokens: dict[str, RefreshToken] = {}
         # Map access_token -> refresh_token for revocation pairing
         self._token_pairs: dict[str, str] = {}
+        self.google_client_id = google_client_id
+        self.allowed_emails = frozenset(email.strip().lower() for email in allowed_emails if email.strip())
+        self._pending: dict[str, PendingSignIn] = {}
+        self._pending_lock = threading.Lock()
+        self._signing_keys: Optional[jwt.PyJWKClient] = None
 
         # Pre-register client if credentials are provided
         if self._locked:
@@ -104,33 +148,16 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
             },
         )
         if self._locked:
-            # Return the pre-configured client credentials instead of rejecting.
-            # Claude.ai requires dynamic registration to work — it uses the
-            # returned client_id/secret for the rest of the OAuth flow.
-            # We modify client_info in-place so the SDK's RegistrationHandler
-            # returns our pre-configured credentials to the caller.
             pre = next(iter(self._clients.values()))
             client_info.client_id = pre.client_id
             client_info.client_secret = pre.client_secret
             client_info.client_id_issued_at = pre.client_id_issued_at
-
-            # Merge redirect_uris: keep pre-configured + add any new ones
-            existing_uris = {str(u) for u in (pre.redirect_uris or [])}
-            merged = list(pre.redirect_uris or [])
-            for uri in client_info.redirect_uris or []:
-                if str(uri) not in existing_uris:
-                    merged.append(uri)
-            client_info.redirect_uris = merged
-
-            # Update stored client with merged redirect_uris
-            pre.redirect_uris = merged
-            self._clients[pre.client_id] = pre
-
+            client_info.redirect_uris = list(pre.redirect_uris or [])
             log(
                 "OAuth register_client (locked: returning pre-configured)",
                 {
                     "client_id": pre.client_id,
-                    "redirect_uris": [str(u) for u in merged],
+                    "redirect_uris": [str(u) for u in client_info.redirect_uris],
                 },
             )
             return
@@ -158,7 +185,12 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
         )
         if not client.client_id:
             raise AuthorizeError(error="invalid_request", error_description="Client has no client_id")
+        if self.google_client_id:
+            return self._start_google_sign_in(client, params)
+        return self._issue_code(client, params)
 
+    def _issue_code(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        """Store a fresh authorization code and return the client redirect that carries it."""
         code = secrets.token_urlsafe(32)
         now = time.time()
 
@@ -181,6 +213,86 @@ class BridgeOAuthProvider(OAuthAuthorizationServerProvider):
             code=code,
             state=params.state,
         )
+
+    def _start_google_sign_in(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        """Park the request under a fresh state and return the bridge URL that starts its Google sign-in."""
+        now = time.time()
+        state = secrets.token_urlsafe(32)
+        entry = PendingSignIn(client, params, secrets.token_urlsafe(32), now + _SIGN_IN_TTL, secrets.token_urlsafe(32))
+        with self._pending_lock:
+            for key in [key for key, pending in self._pending.items() if pending.expires_at <= now]:
+                del self._pending[key]
+            if len(self._pending) >= _MAX_PENDING_SIGN_INS:
+                raise AuthorizeError(error="temporarily_unavailable", error_description="too many sign-ins in progress")
+            self._pending[state] = entry
+        log("OAuth Google sign-in started", {"client_id": client.client_id})
+        return f"{self.issuer_url.rstrip('/')}{START_PATH}?{urlencode({'state': state})}"
+
+    def begin_google_sign_in(self, state: str) -> tuple[str, str]:
+        """The Google sign-in URL and the browser binding for ``state``, handed out once."""
+        with self._pending_lock:
+            pending = self._pending.get(state)
+            if pending is None or pending.expires_at < time.time() or pending.started:
+                raise SignInRefused("sign-in request unknown, expired or already started")
+            self._pending[state] = replace(pending, started=True)
+        redirect_uri = self.issuer_url.rstrip("/") + CALLBACK_PATH
+        return sign_in_url(self.google_client_id, redirect_uri, state, pending.nonce), pending.binding
+
+    def finish_google_sign_in(self, state: str, id_token: str, binding: str) -> str:
+        """The client redirect with a fresh code, once the starting browser proves an allowed Google account."""
+        with self._pending_lock:
+            pending = self._pending.get(state)
+            if pending is None or not pending.started or pending.expires_at < time.time():
+                raise SignInRefused("sign-in request unknown or expired")
+            if not secrets.compare_digest(binding.encode(), pending.binding.encode()):
+                raise SignInRefused("sign-in was not started in this browser")
+            del self._pending[state]
+        if self._signing_keys is None:
+            self._signing_keys = jwt.PyJWKClient(CERTS_URL)
+        email = verified_email(id_token, self.google_client_id, pending.nonce, self.allowed_emails, self._signing_keys)
+        log("OAuth Google sign-in accepted", {"email": email, "client_id": pending.client.client_id})
+        return self._issue_code(pending.client, pending.params)
+
+    async def google_start(self, request: Request) -> Response:
+        """Bind this browser to its sign-in with a cookie, then send it to Google."""
+        state = request.query_params.get("state", "")
+        try:
+            location, binding = self.begin_google_sign_in(state)
+        except SignInRefused as exc:
+            log("OAuth Google sign-in refused", {"error": str(exc)})
+            return PlainTextResponse(f"Sign-in refused: {exc}", status_code=403)
+        response = RedirectResponse(location, status_code=302)
+        response.set_cookie(
+            binding_cookie(state),
+            binding,
+            max_age=_SIGN_IN_TTL,
+            path=CALLBACK_PATH,
+            secure=True,
+            httponly=True,
+            samesite="none",
+        )
+        return response
+
+    async def google_callback(self, request: Request) -> Response:
+        """The endpoint Google posts the ID token to."""
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > _MAX_CALLBACK_BODY:
+                return PlainTextResponse("Sign-in refused: request body too large", status_code=413)
+        form = parse_qs(bytes(body).decode("utf-8", errors="replace"))
+        state = form.get("state", [""])[0]
+        binding = request.cookies.get(binding_cookie(state), "")
+        try:
+            location = await anyio.to_thread.run_sync(
+                self.finish_google_sign_in, state, form.get("id_token", [""])[0], binding
+            )
+        except SignInRefused as exc:
+            log("OAuth Google sign-in refused", {"error": str(exc)})
+            return PlainTextResponse(f"Sign-in refused: {exc}", status_code=403)
+        response = RedirectResponse(location, status_code=302)
+        response.delete_cookie(binding_cookie(state), path=CALLBACK_PATH, secure=True, httponly=True, samesite="none")
+        return response
 
     async def load_authorization_code(
         self,
